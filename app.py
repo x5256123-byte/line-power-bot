@@ -83,6 +83,9 @@ def calculate_power(bbu_watt, efficiency_percent, devices):
     nfb = math.ceil(ac_current * CB_SAFETY)
 if nfb <= 30:
         wire = "8.0mm² (實務安全特規)"
+# 💡 修正重點：配合一線實務，總電流 (NFB) 30A 以下一律改成 8 平方 (8.0mm²)
+    if nfb <= 30:
+        wire = "8.0mm² (實務安全特規)"
     elif nfb <= 50:
         wire = "14mm²"
     else:
