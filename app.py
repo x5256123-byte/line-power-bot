@@ -1,5 +1,6 @@
 import os
 import math
+import re
 from flask import Flask, request, abort
 from linebot import LineBotApi, WebhookHandler
 from linebot.exceptions import InvalidSignatureError
@@ -7,8 +8,7 @@ from linebot.models import MessageEvent, TextMessage, TextSendMessage
 
 app = Flask(__name__)
 
-# ---------- 💡 修正 1：動態讀取 Render 後台的環境變數 ----------
-# 程式會優先抓取 Render 環境變數，如果抓不到，再拿空字串，確保不會因為寫死中文字而大崩潰
+# ---------- 動態讀取 Render 後台的環境變數 ----------
 CHANNEL_ACCESS_TOKEN = os.getenv('LINE_CHANNEL_ACCESS_TOKEN', '')
 CHANNEL_SECRET = os.getenv('LINE_CHANNEL_SECRET', '')
 
@@ -19,16 +19,15 @@ print(f"-> SECRET 讀取狀態: {'❌ 失敗(None)' if not CHANNEL_SECRET else f
 line_bot_api = LineBotApi(CHANNEL_ACCESS_TOKEN)
 handler = WebhookHandler(CHANNEL_SECRET)
 
-# ---------- 設備資料庫 (與原程式相同) ----------
+# ---------- 📊 設備資料庫 (已完成全型號校正，無括號方便輸入) ----------
 EQUIPMENT_DATABASE = {
     "FXDB": {"type": "normal", "power": 260},
     "FHDB": {"type": "normal", "power": 300},
     "AHDB": {"type": "normal", "power": 300},
     "FXEB": {"type": "normal", "power": 340},
     "FHEB": {"type": "normal", "power": 340},
-    "FHEL": {"type": "normal", "power": 350},
     "AHEB": {"type": "normal", "power": 420},
-    "FRHG": {"type": "normal", "power": 540},
+    "FRHG": {"type": "normal", "power": 360},
     "AHHB": {"type": "normal", "power": 580},
     "AZQG": {"type": "normal", "power": 750},
     "AZQI": {"type": "normal", "power": 750},
@@ -37,9 +36,10 @@ EQUIPMENT_DATABASE = {
     "AQQY": {"type": "normal", "power": 950},
     "AVQC": {"type": "normal", "power": 950},
     "AVQL": {"type": "normal", "power": 1450},
-    "AHEGB": {"type": "dual", "N1_Only": 650, "N1_With_B3": 1020},
-    "AHEGG": {"type": "dual", "N1_Only": 650, "N1_With_B3": 1020}
+    "AHEGB": {"type": "dual", "N1_Only": 350, "N1_With_B3": 560},
+    "AHEGG": {"type": "dual", "N1_Only": 350, "N1_With_B3": 560}
 }
+
 SMR_DATABASE = [
     {"name": "TYPE 1 (2.0 kW)", "capacity": 2000},
     {"name": "SMR (5.0 kW)", "capacity": 5000},
@@ -81,15 +81,15 @@ def calculate_power(bbu_watt, efficiency_percent, devices):
     ac_power = total_dc / eff
     ac_current = ac_power / (AC_VOLTAGE * PF)
     nfb = math.ceil(ac_current * CB_SAFETY)
-if nfb <= 30:
-        wire = "8.0mm² (實務安全特規)"
-# 💡 修正重點：配合一線實務，總電流 (NFB) 30A 以下一律改成 8 平方 (8.0mm²)
+    
+    # 💡 修正重點：配合一線實務，總電流 (NFB) 30A 以下一律改成 8 平方 (8.0mm²)
     if nfb <= 30:
         wire = "8.0mm² (實務安全特規)"
     elif nfb <= 50:
         wire = "14mm²"
     else:
         wire = "22mm² 以上"
+        
     return {
         "details": details,
         "net_dc": net_dc,
@@ -107,7 +107,6 @@ def callback():
     signature = request.headers.get('X-Line-Signature')
     body = request.get_data(as_text=True)
     
-    # 💡 修正 2：加裝安全網！攔截 LINE Verify 送出的空測試事件，強制回傳 200 安全過關
     if '"events":[]' in body or not signature:
         print("【安全通關】偵測到 LINE 測試用空事件封包，直接 Bypass 回傳 200！")
         return 'OK', 200
@@ -115,10 +114,10 @@ def callback():
     try:
         handler.handle(body, signature)
     except InvalidSignatureError:
-        print("【驗證失敗】數位簽章不符！請確認 Render 後台的環境變數是否與 LINE 憑證完全一致。")
+        print("【驗證失敗】數位簽章不符！請確認 Render 後台環境變數。")
         abort(400)
     except Exception as e:
-        print(f"【未知例外】已安全防護處理，錯誤原因: {e}")
+        print(f"【未知例外】已安全防護處理，原因: {e}")
         return 'OK', 200
         
     return 'OK', 200
@@ -127,7 +126,7 @@ def callback():
 def handle_message(event):
     user_text = event.message.text.strip()
     if user_text == "幫助" or user_text == "help":
-        reply = "請輸入設備格式：\n型號 數量 [含B3]\n多行輸入多個設備，最後一行輸入 BBU功耗 效率%\n範例：\nFRHG (B7) 2\nAHEGB (N1) 1 含B3\n500 92"
+        reply = "請輸入設備格式：\n型號 數量 [含B3]\n多行輸入多個設備，最後一行輸入 BBU功耗 效率%\n範例：\nFRHG 2\nAHEGB 1 含B3\n500 92"
         line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply))
         return
     # 解析輸入
@@ -146,7 +145,6 @@ def handle_message(event):
             eff = float(parts[1])
             continue
         # 解析設備行
-        import re
         match = re.match(r'^(.+?)\s+(\d+)\s*(含B3|B3)?', line)
         if match:
             model = match.group(1).strip()
@@ -158,14 +156,13 @@ def handle_message(event):
                 line_bot_api.reply_message(event.reply_token, TextSendMessage(text=f"未知型號: {model}"))
                 return
         else:
-            # 嘗試直接當成型號，數量預設1
             if line in EQUIPMENT_DATABASE:
                 devices.append((line, 1, False))
             else:
                 line_bot_api.reply_message(event.reply_token, TextSendMessage(text=f"無法辨識: {line}"))
                 return
     if not devices:
-        reply = "未偵測到設備，請輸入如：\nFRHG (B7) 2\nAHEGB (N1) 1 含B3\n最後一行加上 500 92"
+        reply = "未偵測到設備，請輸入如：\nFRHG 2\nAHEGB 1 含B3\n最後一行加上 500 92"
         line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply))
         return
     result = calculate_power(bbu, eff, devices)
