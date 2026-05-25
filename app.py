@@ -21,23 +21,23 @@ handler = WebhookHandler(CHANNEL_SECRET)
 
 # ---------- 設備資料庫 (與原程式相同) ----------
 EQUIPMENT_DATABASE = {
-    "FXDB (B8)": {"type": "normal", "power": 520},
-    "FHDB (B8)": {"type": "normal", "power": 580},
-    "AHDB (B8)": {"type": "normal", "power": 580},
-    "FXEB (B3)": {"type": "normal", "power": 560},
-    "FHEB (B3)": {"type": "normal", "power": 620},
-    "AHEB (B3)": {"type": "normal", "power": 620},
-    "FRHG (B7)": {"type": "normal", "power": 540},
-    "AHHB (B7 8TR)": {"type": "normal", "power": 780},
-    "AZQG (N35 8TR)": {"type": "normal", "power": 750},
-    "AZQI (N35 8TR)": {"type": "normal", "power": 750},
-    "AEQZ (N35 32TR)": {"type": "normal", "power": 1050},
-    "AQQA (N35 32TR)": {"type": "normal", "power": 1050},
-    "AQQY (N35 32TR)": {"type": "normal", "power": 950},
-    "AVQC (N35 32TR)": {"type": "normal", "power": 950},
-    "AVQL (N35 64TR)": {"type": "normal", "power": 1450},
-    "AHEGB (N1)": {"type": "dual", "N1_Only": 650, "N1_With_B3": 1020},
-    "AHEGG (N1)": {"type": "dual", "N1_Only": 650, "N1_With_B3": 1020}
+    "FXDB": {"type": "normal", "power": 520},
+    "FHDB": {"type": "normal", "power": 580},
+    "AHDB": {"type": "normal", "power": 580},
+    "FXEB": {"type": "normal", "power": 560},
+    "FHEB": {"type": "normal", "power": 620},
+    "AHEB": {"type": "normal", "power": 620},
+    "FRHG": {"type": "normal", "power": 540},
+    "AHHB": {"type": "normal", "power": 780},
+    "AZQG": {"type": "normal", "power": 750},
+    "AZQI": {"type": "normal", "power": 750},
+    "AEQZ": {"type": "normal", "power": 1050},
+    "AQQA": {"type": "normal", "power": 1050},
+    "AQQY": {"type": "normal", "power": 950},
+    "AVQC": {"type": "normal", "power": 950},
+    "AVQL": {"type": "normal", "power": 1450},
+    "AHEGB": {"type": "dual", "N1_Only": 650, "N1_With_B3": 1020},
+    "AHEGG": {"type": "dual", "N1_Only": 650, "N1_With_B3": 1020}
 }
 SMR_DATABASE = [
     {"name": "TYPE 1 (2.0 kW)", "capacity": 2000},
