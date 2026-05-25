@@ -21,14 +21,15 @@ handler = WebhookHandler(CHANNEL_SECRET)
 
 # ---------- 設備資料庫 (與原程式相同) ----------
 EQUIPMENT_DATABASE = {
-    "FXDB": {"type": "normal", "power": 520},
-    "FHDB": {"type": "normal", "power": 580},
-    "AHDB": {"type": "normal", "power": 580},
-    "FXEB": {"type": "normal", "power": 560},
-    "FHEB": {"type": "normal", "power": 620},
-    "AHEB": {"type": "normal", "power": 620},
+    "FXDB": {"type": "normal", "power": 260},
+    "FHDB": {"type": "normal", "power": 300},
+    "AHDB": {"type": "normal", "power": 300},
+    "FXEB": {"type": "normal", "power": 340},
+    "FHEB": {"type": "normal", "power": 340},
+    "FHEL": {"type": "normal", "power": 350},
+    "AHEB": {"type": "normal", "power": 420},
     "FRHG": {"type": "normal", "power": 540},
-    "AHHB": {"type": "normal", "power": 780},
+    "AHHB": {"type": "normal", "power": 580},
     "AZQG": {"type": "normal", "power": 750},
     "AZQI": {"type": "normal", "power": 750},
     "AEQZ": {"type": "normal", "power": 1050},
@@ -80,12 +81,10 @@ def calculate_power(bbu_watt, efficiency_percent, devices):
     ac_power = total_dc / eff
     ac_current = ac_power / (AC_VOLTAGE * PF)
     nfb = math.ceil(ac_current * CB_SAFETY)
-    if nfb <= 20:
-        wire = "2.0mm 或 3.5mm²"
-    elif nfb <= 30:
-        wire = "5.5mm²"
+if nfb <= 30:
+        wire = "8.0mm² (實務安全特規)"
     elif nfb <= 50:
-        wire = "8.0mm² 或 14mm²"
+        wire = "14mm²"
     else:
         wire = "22mm² 以上"
     return {
