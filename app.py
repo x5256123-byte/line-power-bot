@@ -26,6 +26,7 @@ EQUIPMENT_DATABASE = {
     "AHDB": {"type": "normal", "power": 300},
     "FXEB": {"type": "normal", "power": 340},
     "FHEB": {"type": "normal", "power": 340},
+    "FHEL": {"type": "normal", "power": 350},
     "AHEB": {"type": "normal", "power": 420},
     "FRHG": {"type": "normal", "power": 360},
     "AHHB": {"type": "normal", "power": 580},
