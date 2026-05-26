@@ -1,6 +1,5 @@
 import os
 import math
-import re
 from flask import Flask, request, abort
 from linebot import LineBotApi, WebhookHandler
 from linebot.exceptions import InvalidSignatureError
@@ -8,37 +7,35 @@ from linebot.models import MessageEvent, TextMessage, TextSendMessage
 
 app = Flask(__name__)
 
-# ---------- 動態讀取 Render 後台的環境變數 ----------
-CHANNEL_ACCESS_TOKEN = os.getenv('LINE_CHANNEL_ACCESS_TOKEN', '')
-CHANNEL_SECRET = os.getenv('LINE_CHANNEL_SECRET', '')
+# --- LINE API 金鑰設定 ---
+LINE_CHANNEL_ACCESS_TOKEN = os.environ.get("LINE_CHANNEL_ACCESS_TOKEN")
+LINE_CHANNEL_SECRET = os.environ.get("LINE_CHANNEL_SECRET")
 
-print(f"【系統啟動檢查】")
-print(f"-> TOKEN 讀取狀態: {'❌ 失敗(None)' if not CHANNEL_ACCESS_TOKEN else f'✅ 成功(長度:{len(CHANNEL_ACCESS_TOKEN)})'}")
-print(f"-> SECRET 讀取狀態: {'❌ 失敗(None)' if not CHANNEL_SECRET else f'✅ 成功(長度:{len(CHANNEL_SECRET)})'}")
+line_bot_api = LineBotApi(LINE_CHANNEL_ACCESS_TOKEN)
+handler = WebhookHandler(LINE_CHANNEL_SECRET)
 
-line_bot_api = LineBotApi(CHANNEL_ACCESS_TOKEN)
-handler = WebhookHandler(CHANNEL_SECRET)
-
-# ---------- 📊 設備資料庫 (已完成全型號校正，無括號方便輸入) ----------
+# --- 中華電信現役 Nokia AirScale 設備直流功耗資料庫 (已優化 +B3 識別邏輯) ---
 EQUIPMENT_DATABASE = {
-    "FXDB": {"type": "normal", "power": 260},
-    "FHDB": {"type": "normal", "power": 300},
-    "AHDB": {"type": "normal", "power": 300},
-    "FXEB": {"type": "normal", "power": 340},
-    "FHEB": {"type": "normal", "power": 340},
-    "FHEL": {"type": "normal", "power": 350},
-    "AHEB": {"type": "normal", "power": 420},
-    "FRHG": {"type": "normal", "power": 360},
-    "AHHB": {"type": "normal", "power": 580},
-    "AZQG": {"type": "normal", "power": 750},
-    "AZQI": {"type": "normal", "power": 750},
-    "AEQZ": {"type": "normal", "power": 1050},
-    "AQQA": {"type": "normal", "power": 1050},
-    "AQQY": {"type": "normal", "power": 950},
-    "AVQC": {"type": "normal", "power": 950},
-    "AVQL": {"type": "normal", "power": 1450},
-    "AHEGB": {"type": "dual", "N1_Only": 350, "N1_With_B3": 560},
-    "AHEGG": {"type": "dual", "N1_Only": 350, "N1_With_B3": 560}
+    "FXDB": {"name": "FXDB (B8)", "power": 520},
+    "FHDB": {"name": "FHDB (B8)", "power": 580},
+    "AHDB": {"name": "AHDB (B8)", "power": 580},
+    "FXEB": {"name": "FXEB (B3)", "power": 560},
+    "FHEB": {"name": "FHEB (B3)", "power": 620},
+    "AHEB": {"name": "AHEB (B3)", "power": 620},
+    "FRHG": {"name": "FRHG (B7)", "power": 540},
+    "AHHB": {"name": "AHHB (B7 8TR)", "power": 780},
+    "AZQG": {"name": "AZQG (N35 8TR)", "power": 750},
+    "AZQI": {"name": "AZQI (N35 8TR)", "power": 750},
+    "AEQZ": {"name": "AEQZ (N35 32TR)", "power": 1050},
+    "AQQA": {"name": "AQQA (N35 32TR)", "power": 1050},
+    "AQQY": {"name": "AQQY (N35 32TR)", "power": 950},
+    "AVQC": {"name": "AVQC (N35 32TR)", "power": 950},
+    "AVQL": {"name": "AVQL (N35 64TR)", "power": 1450},
+    # 更改：使用符合日常習慣的 +B3 直覺打法
+    "AHEGB": {"name": "AHEGB (N1 純5G)", "power": 350},
+    "AHEGB+B3": {"name": "AHEGB (N1+B3 混模)", "power": 560},
+    "AHEGG": {"name": "AHEGG (N1 純5G)", "power": 350},
+    "AHEGG+B3": {"name": "AHEGG (N1+B3 混模)", "power": 560}
 }
 
 SMR_DATABASE = [
@@ -47,140 +44,133 @@ SMR_DATABASE = [
     {"name": "TYPE 3 (6.0 kW)", "capacity": 6000},
     {"name": "SMR (7.5 kW)", "capacity": 7500}
 ]
-BATTERY_MARGIN = 0.15
-PF = 0.90
-AC_VOLTAGE = 220
-CB_SAFETY = 1.25
 
-def calculate_power(bbu_watt, efficiency_percent, devices):
-    if not devices:
-        return None
-    eff = efficiency_percent / 100.0
-    total_rf = 0
-    details = []
-    for model, qty, b3 in devices:
-        spec = EQUIPMENT_DATABASE.get(model)
-        if not spec:
-            continue
-        if spec["type"] == "dual":
-            unit_power = spec["N1_With_B3"] if b3 else spec["N1_Only"]
-            tag = " (含B3)" if b3 else " (純N1)"
-        else:
-            unit_power = spec["power"]
-            tag = ""
-        row_power = unit_power * qty
-        total_rf += row_power
-        details.append(f"{model}{tag} x{qty}台 = {row_power}W")
-    net_dc = bbu_watt + total_rf
-    battery_margin = net_dc * BATTERY_MARGIN
-    total_dc = net_dc + battery_margin
-    selected_smr = "⚠️ 超出 7.5kW"
-    for smr in SMR_DATABASE:
-        if smr["capacity"] >= total_dc:
-            selected_smr = smr["name"]
-            break
-    ac_power = total_dc / eff
-    ac_current = ac_power / (AC_VOLTAGE * PF)
-    nfb = math.ceil(ac_current * CB_SAFETY)
-    
-    # 💡 修正重點：配合一線實務，總電流 (NFB) 30A 以下一律改成 8 平方 (8.0mm²)
-    if nfb <= 30:
-        wire = "8.0mm² (實務安全特規)"
-    elif nfb <= 50:
-        wire = "14mm²"
-    else:
-        wire = "22mm² 以上"
-        
-    return {
-        "details": details,
-        "net_dc": net_dc,
-        "total_dc": total_dc,
-        "selected_smr": selected_smr,
-        "ac_power": ac_power,
-        "ac_current": ac_current,
-        "nfb": nfb,
-        "wire": wire,
-        "efficiency": efficiency_percent
-    }
+USER_SESSIONS = {}
 
 @app.route("/callback", methods=['POST'])
 def callback():
-    signature = request.headers.get('X-Line-Signature')
+    signature = request.headers['X-Line-Signature']
     body = request.get_data(as_text=True)
-    
-    if '"events":[]' in body or not signature:
-        print("【安全通關】偵測到 LINE 測試用空事件封包，直接 Bypass 回傳 200！")
-        return 'OK', 200
-
     try:
         handler.handle(body, signature)
     except InvalidSignatureError:
-        print("【驗證失敗】數位簽章不符！請確認 Render 後台環境變數。")
         abort(400)
-    except Exception as e:
-        print(f"【未知例外】已安全防護處理，原因: {e}")
-        return 'OK', 200
-        
-    return 'OK', 200
+    return 'OK'
 
 @handler.add(MessageEvent, message=TextMessage)
 def handle_message(event):
-    user_text = event.message.text.strip()
-    if user_text == "幫助" or user_text == "help":
-        reply = "請輸入設備格式：\n型號 數量 [含B3]\n多行輸入多個設備，最後一行輸入 BBU功耗 效率%\n範例：\nFRHG 2\nAHEGB 1 含B3\n500 92"
-        line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply))
+    user_id = event.source.user_id
+    user_msg = event.message.text.strip().upper()  # 自動轉大寫，打小寫 ahegb+b3 也能通
+
+    if user_id not in USER_SESSIONS:
+        USER_SESSIONS[user_id] = {}
+
+    # 指令：開始評估
+    if user_msg in ["開始評估", "HELP", "⚡ 新設基地台電力評估"]:
+        USER_SESSIONS[user_id] = {} 
+        reply_text = (
+            "📱 【Nokia AirScale 電力估算助手】\n\n"
+            "請輸入型號與數量，格式為：【型號 數量】\n"
+            "範例：\n"
+            "輸入「AVQL 3」代表新增3片 64TR 天線\n"
+            "輸入「AHEGB 3」代表 3台 純N1 設備 (350W)\n"
+            "輸入「AHEGB+B3 3」代表 3台 N1+B3 設備 (560W)\n\n"
+            "確認好所有設備後，輸入【計算】產出評估報告！"
+        )
+        line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply_text))
         return
-    # 解析輸入
-    lines = user_text.split('\n')
-    devices = []
-    bbu = 500
-    eff = 92
-    for line in lines:
-        line = line.strip()
-        if not line:
-            continue
-        # 判斷是否為 BBU 效率行
-        parts = line.split()
-        if len(parts) == 2 and parts[0].replace('.','',1).isdigit() and parts[1].replace('.','',1).isdigit():
-            bbu = float(parts[0])
-            eff = float(parts[1])
-            continue
-        # 解析設備行
-        match = re.match(r'^(.+?)\s+(\d+)\s*(含B3|B3)?', line)
-        if match:
-            model = match.group(1).strip()
-            qty = int(match.group(2))
-            b3 = match.group(3) is not None
+
+    # 指令：計算
+    if user_msg == "計算":
+        session = USER_SESSIONS[user_id]
+        if not session:
+            line_bot_api.reply_message(event.reply_token, TextSendMessage(text="❌ 您的清單目前是空的，請先輸入設備與數量（如：AVQL 3）。"))
+            return
+
+        bbu_p = 500  
+        smr_efficiency = 0.92  
+        total_rf_power = 0
+        detail_list = []
+
+        for model, qty in session.items():
+            spec = EQUIPMENT_DATABASE[model]
+            row_total = spec["power"] * qty
+            total_rf_power += row_total
+            detail_list.append(f"   • {spec['name']} x {qty}台 = {row_total} W")
+
+        net_dc_load = bbu_p + total_rf_power
+        battery_charge_margin = net_dc_load * 0.15
+        total_dc_demand = net_dc_load + battery_charge_margin
+
+        # 匹配 SMR 直流設備
+        selected_smr = "⚠️ 超出單組 7.5kW SMR 容量！"
+        for smr in SMR_DATABASE:
+            if smr["capacity"] >= total_dc_demand:
+                selected_smr = smr["name"]
+                break
+
+        # 交流單相三線 220V 計算 (PF=0.9)
+        ac_total_w = total_dc_demand / smr_efficiency
+        pf = 0.90
+        ac_current = ac_total_w / (220 * pf)
+        suggested_nfb = math.ceil(ac_current * 1.25)
+
+        if suggested_nfb <= 20: suggested_wire = "2.0 mm 或 3.5 mm²"
+        elif suggested_nfb <= 30: suggested_wire = "5.5 mm²"
+        elif suggested_nfb <= 50: suggested_wire = "8.0 mm² 或 14 mm²"
+        else: suggested_wire = "22 mm² 或以上"
+
+        details_str = "\n".join(detail_list)
+        report = (
+            f"📋 【現場電力勘查評估報告】\n\n"
+            f"新設設備明細：\n{details_str}\n"
+            f" -----------------------------------\n"
+            f" 🔋 【直流電源系統 (DC -48V)】\n"
+            f"   • 主設備純直流負載: {net_dc_load:.0f} W\n"
+            f"   • 預留電池充電容量: {battery_charge_margin:.0f} W\n"
+            f"   ⚡ 直流端總電量需求: {total_dc_demand:.0f} W\n"
+            f"   👉 建議直流設備: 【{selected_smr}】\n"
+            f" -----------------------------------\n"
+            f" ⚡ 【交流系統 (AC 單相三線 220V)】\n"
+            f"   • SMR 交流側總功耗: {ac_total_w:.0f} W\n"
+            f"   • 運轉線電流負載: {ac_current:.2f} A\n"
+            f"   👉 建議 NFB 規格: {suggested_nfb} A 2P\n"
+            f"   👉 參考建議進線線徑: {suggested_wire}\n\n"
+            f"💡 輸入「開始評估」可重新計算。"
+        )
+        line_bot_api.reply_message(event.reply_token, TextSendMessage(text=report))
+        return
+
+    # 處理設備輸入 (例如: AHEGB+B3 3)
+    try:
+        parts = user_msg.split()
+        if len(parts) == 2:
+            model = parts[0]
+            qty_str = parts[1]
             if model in EQUIPMENT_DATABASE:
-                devices.append((model, qty, b3))
-            else:
-                line_bot_api.reply_message(event.reply_token, TextSendMessage(text=f"未知型號: {model}"))
+                qty = int(qty_str)
+                if qty < 0: raise ValueError
+                
+                if qty == 0:
+                    if model in USER_SESSIONS[user_id]:
+                        del USER_SESSIONS[user_id][model]
+                    reply = f"已從清單中移除 {model}。"
+                else:
+                    USER_SESSIONS[user_id][model] = qty
+                    reply = f"✅ 已記錄：{EQUIPMENT_DATABASE[model]['name']} 共 {qty} 台。\n現有清單：\n"
+                    for k, v in USER_SESSIONS[user_id].items():
+                        reply += f"• {EQUIPMENT_DATABASE[k]['name']}: {v}台\n"
+                    reply += "\n繼續輸入其他設備，或輸入【計算】觀看報告。"
+                
+                line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply))
                 return
-        else:
-            if line in EQUIPMENT_DATABASE:
-                devices.append((line, 1, False))
-            else:
-                line_bot_api.reply_message(event.reply_token, TextSendMessage(text=f"無法辨識: {line}"))
-                return
-    if not devices:
-        reply = "未偵測到設備，請輸入如：\nFRHG 2\nAHEGB 1 含B3\n最後一行加上 500 92"
-        line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply))
-        return
-    result = calculate_power(bbu, eff, devices)
-    if not result:
-        line_bot_api.reply_message(event.reply_token, TextSendMessage(text="計算失敗"))
-        return
-    msg = f"📊 基地台電力報告\n"
-    msg += "\n".join(result["details"]) + "\n"
-    msg += f"直流總負載: {result['net_dc']:.0f} W\n"
-    msg += f"含15%充電: {result['total_dc']:.0f} W\n"
-    msg += f"建議SMR: {result['selected_smr']}\n"
-    msg += f"交流總功耗: {result['ac_power']:.0f} W (效率{result['efficiency']}%)\n"
-    msg += f"220V電流: {result['ac_current']:.2f} A\n"
-    msg += f"建議NFB: {result['nfb']} A 2P\n"
-    msg += f"建議線徑: {result['wire']}"
-    line_bot_api.reply_message(event.reply_token, TextSendMessage(text=msg))
+    except ValueError:
+        pass
+
+    line_bot_api.reply_message(
+        event.reply_token, 
+        TextSendMessage(text="⚠️ 無法辨識指令。請輸入「型號 數量」(如：AHEGB+B3 3)，或輸入「計算」看報告。")
+    )
 
 if __name__ == "__main__":
-    port = int(os.environ.get('PORT', 5000))
-    app.run(host='0.0.0.0', port=port)
+    app.run(host="0.0.0.0", port=5000)
