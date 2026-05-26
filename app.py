@@ -14,28 +14,28 @@ LINE_CHANNEL_SECRET = os.environ.get("LINE_CHANNEL_SECRET")
 line_bot_api = LineBotApi(LINE_CHANNEL_ACCESS_TOKEN)
 handler = WebhookHandler(LINE_CHANNEL_SECRET)
 
-# --- Nokia AirScale 日常運轉基本功耗資料庫 (Typical) ---
+# --- 🎯 經 Nokia 官方手冊嚴格查定之日常運轉基本功耗資料庫 (Typical) ---
 EQUIPMENT_DATABASE = {
-    "FXDB": {"name": "FXDB (B8)", "power": 380},
-    "FHDB": {"name": "FHDB (B8)", "power": 380},
-    "AHDB": {"name": "AHDB (B8)", "power": 380},
-    "FXEB": {"name": "FXEB (B3)", "power": 400},
-    "FHEB": {"name": "FHEB (B3)", "power": 400},
-    "AHEB": {"name": "AHEB (B3)", "power": 400},
-    "FHEL": {"name": "FHEL (B3)", "power": 400},
-    "FRHG": {"name": "FRHG (B7)", "power": 350},
-    "AHHB": {"name": "AHHB (B7 8TR)", "power": 510},
-    "AZQG": {"name": "AZQG (N35 8TR)", "power": 480},
-    "AZQI": {"name": "AZQI (N35 8TR)", "power": 480},
-    "AEQZ": {"name": "AEQZ (N35 32TR)", "power": 680},
-    "AQQA": {"name": "AQQA (N35 32TR)", "power": 680},
-    "AQQY": {"name": "AQQY (N35 32TR)", "power": 620},
-    "AVQC": {"name": "AVQC (N35 32TR)", "power": 620},
-    "AVQL": {"name": "AVQL (N35 64TR)", "power": 950},
-    "AHEGB": {"name": "AHEGB (N1 純5G)", "power": 350},
-    "AHEGB+B3": {"name": "AHEGB (N1+B3 混模)", "power": 560},
-    "AHEGG": {"name": "AHEGG (N1 純5G)", "power": 350},
-    "AHEGG+B3": {"name": "AHEGG (N1+B3 混模)", "power": 560}
+    "FXDB": {"name": "FXDB", "power": 380},
+    "FHDB": {"name": "FHDB", "power": 380},
+    "AHDB": {"name": "AHDB", "power": 380},
+    "FXEB": {"name": "FXEB", "power": 360},  # 經查定優化為 360W
+    "FHEB": {"name": "FHEB", "power": 400},
+    "AHEB": {"name": "AHEB", "power": 400},
+    "FHEL": {"name": "FHEL", "power": 430},  # 經查定優化為 430W
+    "FRHG": {"name": "FRHG", "power": 350},  
+    "AHHB": {"name": "AHHB", "power": 510},  
+    "AZQG": {"name": "AZQG", "power": 480},
+    "AZQI": {"name": "AZQI", "power": 480},
+    "AEQZ": {"name": "AEQZ", "power": 680},
+    "AQQA": {"name": "AQQA", "power": 680},
+    "AQQY": {"name": "AQQY", "power": 620},
+    "AVQC": {"name": "AVQC", "power": 620},
+    "AVQL": {"name": "AVQL", "power": 950},
+    "AHEGB": {"name": "AHEGB", "power": 350},
+    "AHEGB+B3": {"name": "AHEGB+B3", "power": 560},
+    "AHEGG": {"name": "AHEGG", "power": 350},
+    "AHEGG+B3": {"name": "AHEGG+B3", "power": 560}
 }
 
 # SMR 直流設備對照
@@ -64,7 +64,6 @@ def handle_message(event):
     raw_msg = event.message.text.strip()
     user_msg = raw_msg.upper()
 
-    # 初始化會話
     if user_id not in USER_SESSIONS:
         USER_SESSIONS[user_id] = {
             "step": "input_site_name", 
@@ -195,7 +194,7 @@ def handle_message(event):
         else:
             line_bot_api.reply_message(event.reply_token, TextSendMessage(text="⚠️ 請回覆 1 選擇單相三線，或回覆 2 選擇三相四線。"))
 
-    # 階段三：手選直流設備 (多機累加與輸出最終防呆統計報告)
+    # 階段三：手選直流設備 (多機累加與最終防呆報告)
     elif session["step"] == "select_smr":
         if user_msg in SMR_DATABASE:
             chosen_smr_spec = SMR_DATABASE[user_msg]
@@ -204,7 +203,6 @@ def handle_message(event):
             current_total_capacity = sum([smr["capacity"] for smr in session["chosen_smrs"]])
             total_dc_demand = session["total_dc_demand"]
 
-            # 直流容量累加檢查
             if current_total_capacity < total_dc_demand:
                 remaining_w = total_dc_demand - current_total_capacity
                 chosen_names = " + ".join([smr["name"] for smr in session["chosen_smrs"]])
@@ -219,43 +217,38 @@ def handle_message(event):
                 line_bot_api.reply_message(event.reply_token, TextSendMessage(text=loop_reply))
                 return
 
-            # --- 直流容量足夠，進行最終交流與法規線徑換算 ---
             net_dc_load = session["net_dc_load"]
             smr_efficiency = 0.92
             pf = 0.90
             ac_total_w = total_dc_demand / smr_efficiency
 
-            # 🎯 配合現場 RST+N 實務：無論選 1 或 2，線電流皆以實質單相 220V 計算，確保安全！
             if session["ac_phase"] == "1P3W":
                 phase_title = "單相三線 (1P3W 220V)"
                 nfb_poles = "2P"
             else:
                 phase_title = "三相四線 (3P4W 380V -> 實務抓單相 RST+N 220V)"
-                nfb_poles = "2P (RST單相配N)" # 實務接線為單相迴路，開關使用 2P
+                nfb_poles = "2P (RST單相配N)"
             
-            ac_current = ac_total_w / (220 * pf) # 統一套用單相 220V 負載電流公式
-
-            # 留 1.25 倍安全裕度進行開關與電氣級數精算
+            ac_current = ac_total_w / (220 * pf)
             calculated_nfb = math.ceil(ac_current * 1.25)
             
-            # 遵守最嚴格的台灣官方管內安培容量法規：
+            # 電工法規導線管內安培容量判定：
             if calculated_nfb <= 30:
                 suggested_nfb = 30
                 suggested_wire = "8.0 mm²"  # 30A以下(含30A)一律鎖死 8.0 mm² 打底
             elif calculated_nfb <= 50:
                 suggested_nfb = 50          
-                suggested_wire = "14 mm²"   # 14平方穿管法定安全容量 50A (對應 40A/50A NFB)
+                suggested_wire = "14 mm²"   # 14平方穿管法定安全容量 50A
             elif calculated_nfb <= 60:
                 suggested_nfb = 60
-                suggested_wire = "22 mm²"   # 22平方穿管法定安全容量 60A (對應 60A NFB)
+                suggested_wire = "22 mm²"   # 22平方穿管法定安全容量 60A
             elif calculated_nfb <= 85:
                 suggested_nfb = 75 if calculated_nfb <= 75 else 100
-                suggested_wire = "38 mm²"   # 38平方穿管法定安全容量 85A (對應 75A/100A NFB)
+                suggested_wire = "38 mm²"   # 38平方穿管法定安全容量 85A
             else:
                 suggested_nfb = calculated_nfb
                 suggested_wire = "50 mm² 或以上"
 
-            # 換算台電交流端日常基本電度量
             ac_kwh_per_hour = ac_total_w / 1000.0
             ac_kwh_per_month = ac_kwh_per_hour * 24 * 30
             final_smr_config = " + ".join([smr["name"] for smr in session["chosen_smrs"]])
@@ -270,4 +263,24 @@ def handle_message(event):
                 f"   • 直流端總電量需求: {total_dc_demand:.0f} W\n"
                 f"   👉 最終多機配置: 【 {final_smr_config} 】\n"
                 f"   👉 供電總瓦數能力: {current_total_capacity} W\n"
-                f"
+                f" -----------------------------------\n"
+                f" ⚡ 3. 交流供電系統統計 ({phase_title})\n"
+                f"   • SMR 常態交流側總功耗: {ac_total_w:.0f} W\n"
+                f"   • 現場基本運轉線電流: {ac_current:.2f} A\n"
+                f"   👉 建議 NFB 開關規格: {suggested_nfb} A {nfb_poles}\n"
+                f"   👉 現場拉線進線線徑: {suggested_wire} (30A內保底8.0mm²，30A以上依法規以此類推)\n"
+                f" -----------------------------------\n"
+                f" 📊 4. 預估現場日常耗電度數 (台電計費基準)\n"
+                f"   • 每小時基本用電: {ac_total_w:.0f} W ➡️ 【 {ac_kwh_per_hour:.3f} 度電 / 小時 】\n"
+                f"   • 每月份預估總用電: 【 {ac_kwh_per_month:.1f} 度電 / 月 】\n\n"
+                f"💡 輸入「開始評估」可開啟下一座台的電力計算。"
+            )
+            
+            USER_SESSIONS[user_id] = {"step": "input_site_name", "site_name": "未命名站台", "equipments": {}, "ac_phase": "1P3W", "chosen_smrs": []}
+            line_bot_api.reply_message(event.reply_token, TextSendMessage(text=report))
+            return
+        else:
+            line_bot_api.reply_message(event.reply_token, TextSendMessage(text="⚠️ 請輸入正確的直流設備代號數字 (1、2、3 或 4)。"))
+
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=5000)
