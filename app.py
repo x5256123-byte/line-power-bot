@@ -14,15 +14,15 @@ LINE_CHANNEL_SECRET = os.environ.get("LINE_CHANNEL_SECRET")
 line_bot_api = LineBotApi(LINE_CHANNEL_ACCESS_TOKEN)
 handler = WebhookHandler(LINE_CHANNEL_SECRET)
 
-# --- 🎯 經 Nokia 官方手冊嚴格查定之日常運轉基本功耗資料庫 (Typical) ---
+# --- Nokia AirScale 日常運轉基本功耗資料庫 ---
 EQUIPMENT_DATABASE = {
     "FXDB": {"name": "FXDB", "power": 380},
     "FHDB": {"name": "FHDB", "power": 380},
     "AHDB": {"name": "AHDB", "power": 380},
-    "FXEB": {"name": "FXEB", "power": 360},  # 經查定優化為 360W
+    "FXEB": {"name": "FXEB", "power": 360},  
     "FHEB": {"name": "FHEB", "power": 400},
     "AHEB": {"name": "AHEB", "power": 400},
-    "FHEL": {"name": "FHEL", "power": 430},  # 經查定優化為 430W
+    "FHEL": {"name": "FHEL", "power": 430},  
     "FRHG": {"name": "FRHG", "power": 350},  
     "AHHB": {"name": "AHHB", "power": 510},  
     "AZQG": {"name": "AZQG", "power": 480},
@@ -62,7 +62,7 @@ def callback():
 def handle_message(event):
     user_id = event.source.user_id
     raw_msg = event.message.text.strip()
-    user_msg = raw_msg.upper()
+    user_msg = raw_msg.upper()  # 💡 強制全轉大寫，保證後續「計算」、「開始評估」不受大小寫影響
 
     if user_id not in USER_SESSIONS:
         USER_SESSIONS[user_id] = {
@@ -87,18 +87,18 @@ def handle_message(event):
 
     # 階段零：設定站台名稱
     if session["step"] == "input_site_name":
-        session["site_name"] = raw_msg
+        session["site_name"] = raw_msg  # 站台名稱保留使用者原始輸入的大小寫
         session["step"] = "input_equip"
         reply_text = (
             f"✅ 站台名稱：【 {raw_msg} 】\n\n"
             f"【步驟 2：輸入新設射頻】\n"
-            f"請輸入型號與數量，格式為：【型號 數量】（如：AVQL 3）\n"
+            f"請輸入型號與數量，格式為：【型號 數量】（大小寫皆可，如：avql 3）\n"
             f"確認好設備後，請輸入【計算】。"
         )
         line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply_text))
         return
 
-    # 階段一：處理設備輸入
+    # 階段一：處理設備輸入 (完美支援大小寫)
     elif session["step"] == "input_equip":
         if user_msg == "計算":
             if not session["equipments"]:
@@ -117,7 +117,7 @@ def handle_message(event):
             return
 
         try:
-            parts = user_msg.split()
+            parts = user_msg.split()  # 這裡使用已被 .upper() 轉為全大寫的字串來拆解
             if len(parts) == 2:
                 model, qty_str = parts[0], parts[1]
                 if model in EQUIPMENT_DATABASE:
@@ -130,7 +130,8 @@ def handle_message(event):
                         reply = f"已從清單中移除 {model}。"
                     else:
                         session["equipments"][model] = qty
-                        reply = f"✅ 已記錄：{EQUIPMENT_DATABASE[model]['name']} 共 {qty} 台。\n"
+                        reply = f"✅ 已記錄：{EQUIPMENT_DATABASE[model]['name']} 共 {qty} 台。\n現有清單：\n"
+                        # 💡 修正：確保迴圈讀取出來的 Key (k) 在對照資料庫時能正確對應大寫名稱
                         for k, v in session["equipments"].items():
                             reply += f"• {EQUIPMENT_DATABASE[k]['name']}: {v}台\n"
                         reply += "\n輸入【計算】選擇供電相別。"
@@ -139,7 +140,7 @@ def handle_message(event):
                     return
         except ValueError:
             pass
-        line_bot_api.reply_message(event.reply_token, TextSendMessage(text="⚠️ 請輸入「型號 數量」(如：AVQL 3)，或輸入「計算」。"))
+        line_bot_api.reply_message(event.reply_token, TextSendMessage(text="⚠️ 請輸入「型號 數量」(如：avql 3)，或輸入「計算」。"))
 
     # 階段二：選擇 AC 供電相別
     elif session["step"] == "select_ac_phase":
@@ -235,16 +236,16 @@ def handle_message(event):
             # 電工法規導線管內安培容量判定：
             if calculated_nfb <= 30:
                 suggested_nfb = 30
-                suggested_wire = "8.0 mm²"  # 30A以下(含30A)一律鎖死 8.0 mm² 打底
+                suggested_wire = "8.0 mm²"  
             elif calculated_nfb <= 50:
                 suggested_nfb = 50          
-                suggested_wire = "14 mm²"   # 14平方穿管法定安全容量 50A
+                suggested_wire = "14 mm²"   
             elif calculated_nfb <= 60:
                 suggested_nfb = 60
-                suggested_wire = "22 mm²"   # 22平方穿管法定安全容量 60A
+                suggested_wire = "22 mm²"   
             elif calculated_nfb <= 85:
                 suggested_nfb = 75 if calculated_nfb <= 75 else 100
-                suggested_wire = "38 mm²"   # 38平方穿管法定安全容量 85A
+                suggested_wire = "38 mm²"   
             else:
                 suggested_nfb = calculated_nfb
                 suggested_wire = "50 mm² 或以上"
