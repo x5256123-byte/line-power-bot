@@ -64,15 +64,22 @@ def handle_message(event):
     raw_msg = event.message.text.strip()
     user_msg = raw_msg.upper()
 
+    # 初始化會話
     if user_id not in USER_SESSIONS:
-        USER_SESSIONS[user_id] = {"step": "input_site_name", "site_name": "未命名站台", "equipments": {}}
+        USER_SESSIONS[user_id] = {
+            "step": "input_site_name", 
+            "site_name": "未命名站台", 
+            "equipments": {}, 
+            "ac_phase": "1P3W", 
+            "chosen_smrs": []
+        }
 
     session = USER_SESSIONS[user_id]
 
     if user_msg in ["開始評估", "HELP", "⚡ 新設基地台電力評估"]:
-        USER_SESSIONS[user_id] = {"step": "input_site_name", "site_name": "未命名站台", "equipments": {}}
+        USER_SESSIONS[user_id] = {"step": "input_site_name", "site_name": "未命名站台", "equipments": {}, "ac_phase": "1P3W", "chosen_smrs": []}
         reply_text = (
-            "📱 【Nokia AirScale 電力與度數估算助手】\n\n"
+            "📱 【Nokia 電力估算助手 - 現場工法防呆版】\n\n"
             "【步驟 1：請輸入站台名稱】\n"
             "請直接回覆文字告知此站台名稱或編號（如：林園園區_01）。"
         )
@@ -83,68 +90,29 @@ def handle_message(event):
     if session["step"] == "input_site_name":
         session["site_name"] = raw_msg
         session["step"] = "input_equip"
-        
         reply_text = (
-            f"✅ 站台名稱已設定為：【 {raw_msg} 】\n\n"
+            f"✅ 站台名稱：【 {raw_msg} 】\n\n"
             f"【步驟 2：輸入新設射頻】\n"
-            f"請輸入型號與數量，格式為：【型號 數量】\n"
+            f"請輸入型號與數量，格式為：【型號 數量】（如：AVQL 3）\n"
             f"確認好設備後，請輸入【計算】。"
         )
         line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply_text))
         return
 
-    # 階段一：處理設備輸入與直流瓦數/度數計算
+    # 階段一：處理設備輸入
     elif session["step"] == "input_equip":
         if user_msg == "計算":
             if not session["equipments"]:
                 line_bot_api.reply_message(event.reply_token, TextSendMessage(text="❌ 您的清單目前是空的，請先輸入設備。"))
                 return
-
-            bbu_p = 400  
-            total_rf_power = 0
-            detail_list = []
-
-            for model, qty in session["equipments"].items():
-                spec = EQUIPMENT_DATABASE[model]
-                row_total = spec["power"] * qty
-                total_rf_power += row_total
-                detail_list.append(f"   • {spec['name']} x {qty}台 = {row_total} W")
-
-            net_dc_load = bbu_p + total_rf_power
-            total_dc_demand = net_dc_load 
-
-            # 換算直流端日常基本電度量
-            dc_kwh_per_hour = total_dc_demand / 1000.0
-            dc_kwh_per_month = dc_kwh_per_hour * 24 * 30
-
-            session["net_dc_load"] = net_dc_load
-            session["total_dc_demand"] = total_dc_demand
-            session["detail_str"] = "\n".join(detail_list)
-            session["step"] = "select_smr"
-
-            smart_rec = "超出單組 7.5kW 容量！"
-            for k, smr in SMR_DATABASE.items():
-                if smr["capacity"] >= total_dc_demand:
-                    smart_rec = smr["name"]
-                    break
-
+            
+            session["step"] = "select_ac_phase"
             reply_text = (
-                f"🏢 站台：{session['site_name']}\n"
-                f"🔋 【日常基本直流電量與度數統計】\n\n"
-                f"設備常態直流明細：\n{session['detail_str']}\n"
-                f" -----------------------------------\n"
-                f" • 主設備直流負載總和: {net_dc_load:.0f} W\n"
-                f" ⚡ 直流端總電量需求: {total_dc_demand:.0f} W ({total_dc_demand/1000:.2f} kW)\n"
-                f" 📊 直流端每小時耗電: {dc_kwh_per_hour:.3f} 度電\n"
-                f" 📊 直流端每月預估耗電: {dc_kwh_per_month:.1f} 度電\n"
-                f" 💡 (平時基本運轉推薦：{smart_rec})\n"
-                f" -----------------------------------\n\n"
-                f"【步驟 3：請選填現場要配置的直流設備】\n"
-                f"請直接回覆【代號數字 1 ~ 4】:\n"
-                f"【1】 TYPE 1 (2.0 kW)\n"
-                f"【2】 SMR (5.0 kW)\n"
-                f"【3】 TYPE 3 (6.0 kW)\n"
-                f"【4】 SMR (7.5 kW)"
+                f"🏢 站台：{session['site_name']}\n\n"
+                f"【步驟 3：請選擇現場交流供電相別】\n"
+                f"請直接回覆代號數字【1 或 2】:\n"
+                f"【1】 🔴 單相三線 (1P3W 220V) - 一般頂樓台/常規站\n"
+                f"【2】 🔵 三相四線 (3P4W 380V) - 實務抓 RST 任一相配 N 相接法"
             )
             line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply_text))
             return
@@ -166,48 +134,123 @@ def handle_message(event):
                         reply = f"✅ 已記錄：{EQUIPMENT_DATABASE[model]['name']} 共 {qty} 台。\n"
                         for k, v in session["equipments"].items():
                             reply += f"• {EQUIPMENT_DATABASE[k]['name']}: {v}台\n"
-                        reply += "\n輸入【計算】觀看常態瓦數、度數並選擇SMR。"
+                        reply += "\n輸入【計算】選擇供電相別。"
                     
                     line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply))
                     return
         except ValueError:
             pass
-
         line_bot_api.reply_message(event.reply_token, TextSendMessage(text="⚠️ 請輸入「型號 數量」(如：AVQL 3)，或輸入「計算」。"))
 
-    # 階段二：手選直流設備並輸出最終報告 (精準連動台電管內安全安培容量)
+    # 階段二：選擇 AC 供電相別
+    elif session["step"] == "select_ac_phase":
+        if user_msg in ["1", "2"]:
+            session["ac_phase"] = "1P3W" if user_msg == "1" else "3P4W"
+            
+            bbu_p = 400  
+            total_rf_power = 0
+            detail_list = []
+
+            for model, qty in session["equipments"].items():
+                spec = EQUIPMENT_DATABASE[model]
+                row_total = spec["power"] * qty
+                total_rf_power += row_total
+                detail_list.append(f"   • {spec['name']} x {qty}台 = {row_total} W")
+
+            net_dc_load = bbu_p + total_rf_power
+            total_dc_demand = net_dc_load 
+
+            dc_kwh_per_hour = total_dc_demand / 1000.0
+            dc_kwh_per_month = dc_kwh_per_hour * 24 * 30
+
+            session["net_dc_load"] = net_dc_load
+            session["total_dc_demand"] = total_dc_demand
+            session["detail_str"] = "\n".join(detail_list)
+            
+            session["step"] = "select_smr"
+            session["chosen_smrs"] = []
+
+            phase_name = "單相三線 220V" if session["ac_phase"] == "1P3W" else "三相四線 (實務抓單相 RST+N 220V)"
+
+            reply_text = (
+                f"🏢 站台：{session['site_name']}\n"
+                f"⚡ 供電相別：{phase_name}\n"
+                f"🔋 【日常基本直流電量與度數統計】\n\n"
+                f"設備常態直流明細：\n{session['detail_str']}\n"
+                f" -----------------------------------\n"
+                f" • 主設備直流負載總和: {net_dc_load:.0f} W\n"
+                f" ⚡ 直流端總電量需求: {total_dc_demand:.0f} W ({total_dc_demand/1000:.2f} kW)\n"
+                f" 📊 直流端每小時耗電: {dc_kwh_per_hour:.3f} 度電\n"
+                f" 📊 直流端每月預估耗電: {dc_kwh_per_month:.1f} 度電\n"
+                f" -----------------------------------\n\n"
+                f"【步驟 4：請選填直流供電設備（支援多機累加）】\n"
+                f"請直接回覆代號數字【1 ~ 4】:\n"
+                f"【1】 TYPE 1 (2.0 kW)\n"
+                f"【2】 SMR (5.0 kW)\n"
+                f"【3】 TYPE 3 (6.0 kW)\n"
+                f"【4】 SMR (7.5 kW)"
+            )
+            line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply_text))
+            return
+        else:
+            line_bot_api.reply_message(event.reply_token, TextSendMessage(text="⚠️ 請回覆 1 選擇單相三線，或回覆 2 選擇三相四線。"))
+
+    # 階段三：手選直流設備 (多機累加與輸出最終防呆統計報告)
     elif session["step"] == "select_smr":
         if user_msg in SMR_DATABASE:
-            chosen_smr = SMR_DATABASE[user_msg]
+            chosen_smr_spec = SMR_DATABASE[user_msg]
+            session["chosen_smrs"].append(chosen_smr_spec)
+
+            current_total_capacity = sum([smr["capacity"] for smr in session["chosen_smrs"]])
             total_dc_demand = session["total_dc_demand"]
+
+            # 直流容量累加檢查
+            if current_total_capacity < total_dc_demand:
+                remaining_w = total_dc_demand - current_total_capacity
+                chosen_names = " + ".join([smr["name"] for smr in session["chosen_smrs"]])
+                loop_reply = (
+                    f"⚡ 【直流供電容量仍有不足！】\n\n"
+                    f" • 目前已選配置: {chosen_names}\n"
+                    f" 🔋 目前累計總供電容量: {current_total_capacity:.0f} W\n"
+                    f" ⚠️ 缺額尚差: 🔴 【 {remaining_w:.0f} W 】\n"
+                    f" -----------------------------------\n\n"
+                    f"【請選擇再補一台直流設備（回覆 1 ~ 4）】"
+                )
+                line_bot_api.reply_message(event.reply_token, TextSendMessage(text=loop_reply))
+                return
+
+            # --- 直流容量足夠，進行最終交流與法規線徑換算 ---
             net_dc_load = session["net_dc_load"]
             smr_efficiency = 0.92
             pf = 0.90
-
-            safety_warning = ""
-            if chosen_smr["capacity"] < total_dc_demand:
-                safety_warning = f"\n⚠️ 【工程警告】：您選的 {chosen_smr['name']} 容量小於常態直流需求 ({total_dc_demand:.0f}W)！\n"
-
-            # 最終交流電統計與度數換算
             ac_total_w = total_dc_demand / smr_efficiency
-            ac_current = ac_total_w / (220 * pf)
+
+            # 🎯 配合現場 RST+N 實務：無論選 1 或 2，線電流皆以實質單相 220V 計算，確保安全！
+            if session["ac_phase"] == "1P3W":
+                phase_title = "單相三線 (1P3W 220V)"
+                nfb_poles = "2P"
+            else:
+                phase_title = "三相四線 (3P4W 380V -> 實務抓單相 RST+N 220V)"
+                nfb_poles = "2P (RST單相配N)" # 實務接線為單相迴路，開關使用 2P
             
+            ac_current = ac_total_w / (220 * pf) # 統一套用單相 220V 負載電流公式
+
             # 留 1.25 倍安全裕度進行開關與電氣級數精算
             calculated_nfb = math.ceil(ac_current * 1.25)
             
-            # 🎯 🎯 依據使用者實務指導與最安全官方電工法規（管內安培容量）判定：
+            # 遵守最嚴格的台灣官方管內安培容量法規：
             if calculated_nfb <= 30:
                 suggested_nfb = 30
                 suggested_wire = "8.0 mm²"  # 30A以下(含30A)一律鎖死 8.0 mm² 打底
             elif calculated_nfb <= 50:
-                suggested_nfb = 50          # 自動跳升級數
-                suggested_wire = "14 mm²"   # 30A以上以此類推：14平方穿管安全容量可衝到 50A
+                suggested_nfb = 50          
+                suggested_wire = "14 mm²"   # 14平方穿管法定安全容量 50A (對應 40A/50A NFB)
             elif calculated_nfb <= 60:
                 suggested_nfb = 60
-                suggested_wire = "22 mm²"   # 22平方穿管法定安全容量為 60A
+                suggested_wire = "22 mm²"   # 22平方穿管法定安全容量 60A (對應 60A NFB)
             elif calculated_nfb <= 85:
                 suggested_nfb = 75 if calculated_nfb <= 75 else 100
-                suggested_wire = "38 mm²"   # 38平方穿管法定安全容量為 85A
+                suggested_wire = "38 mm²"   # 38平方穿管法定安全容量 85A (對應 75A/100A NFB)
             else:
                 suggested_nfb = calculated_nfb
                 suggested_wire = "50 mm² 或以上"
@@ -215,34 +258,16 @@ def handle_message(event):
             # 換算台電交流端日常基本電度量
             ac_kwh_per_hour = ac_total_w / 1000.0
             ac_kwh_per_month = ac_kwh_per_hour * 24 * 30
+            final_smr_config = " + ".join([smr["name"] for smr in session["chosen_smrs"]])
 
             report = (
                 f"📋 【⚡ 基地台日常常態電力與度數報告】\n"
-                f"🏢 站台名稱：{session['site_name']}\n"
-                f"{safety_warning}\n"
+                f"🏢 站台名稱：{session['site_name']}\n\n"
                 f" 🔹 1. 新設射頻清單：\n{session['detail_str']}\n"
                 f" -----------------------------------\n"
                 f" 🔋 2. 直流供電設備確認\n"
                 f"   • 主設備基本直流負載: {net_dc_load:.0f} W\n"
-                f"   👉 現場配置設備: 【{chosen_smr['name']}】\n"
-                f" -----------------------------------\n"
-                f" ⚡ 3. 交流供電系統統計 (單相三線 220V)\n"
-                f"   • SMR 常態交流側總功耗: {ac_total_w:.0f} W\n"
-                f"   • 現場基本運轉線電流: {ac_current:.2f} A\n"
-                f"   👉 建議 NFB 開關規格: {suggested_nfb} A 2P\n"
-                f"   👉 現場拉線進線線徑: {suggested_wire} (30A內保底8.0mm²，30A以上依法規以此類推)\n"
-                f" -----------------------------------\n"
-                f" 📊 4. 預估現場日常耗電度數 (台電計費基準)\n"
-                f"   • 每小時基本用電: {ac_total_w:.0f} W ➡️ 【 {ac_kwh_per_hour:.3f} 度電 / 小時 】\n"
-                f"   • 每月份預估總用電: 【 {ac_kwh_per_month:.1f} 度電 / 月 】\n\n"
-                f"💡 輸入「開始評估」可開啟下一座台的電力計算。"
-            )
-            
-            USER_SESSIONS[user_id] = {"step": "input_site_name", "site_name": "未命名站台", "equipments": {}}
-            line_bot_api.reply_message(event.reply_token, TextSendMessage(text=report))
-            return
-        else:
-            line_bot_api.reply_message(event.reply_token, TextSendMessage(text="⚠️ 請輸入正確的直流設備代號數字 (1、2、3 或 4)。"))
-
-if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5000)
+                f"   • 直流端總電量需求: {total_dc_demand:.0f} W\n"
+                f"   👉 最終多機配置: 【 {final_smr_config} 】\n"
+                f"   👉 供電總瓦數能力: {current_total_capacity} W\n"
+                f"
