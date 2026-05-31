@@ -14,16 +14,19 @@ LINE_CHANNEL_SECRET = os.environ.get("LINE_CHANNEL_SECRET")
 line_bot_api = LineBotApi(LINE_CHANNEL_ACCESS_TOKEN)
 handler = WebhookHandler(LINE_CHANNEL_SECRET)
 
-# --- 本地 CSV 檔案路徑 (請確保檔案與 app.py 放在同一個資料夾) ---
+# --- 本地 CSV 檔案路徑 ---
 CSV_FILE_PATH = os.path.join(os.path.dirname(__file__), "pingtung_sites.csv")
 
-# --- Nokia AirScale 日常運轉基本功耗資料庫 ---
+# --- 🎯 終極精準版：射頻設備日常運轉基本功耗資料庫 (ARDA 已移至 FXDB 下方) ---
 EQUIPMENT_DATABASE = {
+    # 宏基站 (Macro Cell) 既存規格
     "FXDB": {"name": "FXDB", "power": 380},
+    "ARDA": {"name": "ARDA", "power": 480},  # 🟢 已移至此：900頻段大功率 Macro 設備 (480W)
     "FHDB": {"name": "FHDB", "power": 380},
     "AHDB": {"name": "AHDB", "power": 380},
     "FXEB": {"name": "FXEB", "power": 360},  
-    "FHEB": {"name": "FHEB", "power": 400},
+    "FXED": {"name": "FXED", "power": 360},  
+    "FHEB": {"name": "FHEB", "power": 400},  
     "AHEB": {"name": "AHEB", "power": 400},
     "FHEL": {"name": "FHEL", "power": 430},  
     "FRHG": {"name": "FRHG", "power": 350},  
@@ -38,9 +41,17 @@ EQUIPMENT_DATABASE = {
     "AHEGB": {"name": "AHEGB", "power": 350},
     "AHEGB+B3": {"name": "AHEGB+B3", "power": 560},
     "AHEGG": {"name": "AHEGG", "power": 350},
-    "AHEGG+B3": {"name": "AHEGG+B3", "power": 560}
+    "AHEGG+B3": {"name": "AHEGG+B3", "power": 560},
+    
+    # 最新硬體常態瓦數精確版 (Small Cell 微細胞規格)
+    "FW2EHB": {"name": "FW2EHB", "power": 250},  
+    "FR2EB": {"name": "FR2EB", "power": 140},    
+    "FWEA": {"name": "FWEA", "power": 160},      
+    "AHEJ": {"name": "AHEJ", "power": 170},      
+    "AWHQE": {"name": "AWHQE", "power": 110}     
 }
 
+# SMR 直流設備對照
 SMR_DATABASE = {
     "1": {"name": "TYPE 1 (2.0 kW)", "capacity": 2000},
     "2": {"name": "SMR (5.0 kW)", "capacity": 5000},
@@ -51,11 +62,7 @@ SMR_DATABASE = {
 USER_SESSIONS = {}
 
 def search_csv_database(keyword):
-    """
-    搜尋本地 CSV 資料庫，支援站號精準比對與站名模糊比對
-    傳回值: (狀態碼, 資料)
-    狀態碼: 'MATCH' (找到唯一站台), 'MULTI' (多個結果), 'NOT_FOUND' (查無此站)
-    """
+    """搜尋本地 CSV 資料庫，支援站號精準比對與站名模糊比對"""
     if not os.path.exists(CSV_FILE_PATH):
         return 'NOT_FOUND', None
         
@@ -64,28 +71,22 @@ def search_csv_database(keyword):
     fuzzy_matches = []
     
     with open(CSV_FILE_PATH, mode='r', encoding='utf-8') as f:
-        # 使用 DictReader 依據欄位標頭讀取
         reader = csv.DictReader(f)
         for row in reader:
             sid = str(row.get("site_id", "")).strip().upper()
             sname = str(row.get("site_name", "")).strip()
             sname_up = sname.upper()
             
-            # 1. 優先進行站號(site_id)精準比對
             if sid == keyword_up:
                 exact_match = row
                 break
-            
-            # 2. 進行站名(site_name)模糊比對 (包含關鍵字)
             if keyword_up in sname_up:
                 fuzzy_matches.append(row)
                 
     if exact_match:
         return 'MATCH', exact_match
-        
     if len(fuzzy_matches) == 1:
         return 'MATCH', fuzzy_matches[0]
-        
     if len(fuzzy_matches) > 1:
         return 'MULTI', fuzzy_matches
         
@@ -124,23 +125,21 @@ def handle_message(event):
             "📱 【Nokia 電力助手 - 智慧雙向搜尋版】\n\n"
             "【步驟 1：請輸入站號 或 站台名稱】\n"
             "• 可以直接打站號（如：PTG1234）\n"
-            "• 也可以打站台名稱關鍵字（如：萬丹 或 五房台）\n\n"
+            "• 也可以打站台名稱關鍵字（如：萬丹）\n\n"
             "系統將會自動檢索屏東歷史資料清單。"
         )
         line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply_text))
         return
 
-    # 🔍 階段零：處理「站號」或「站名關鍵字」的雙向檢索
+    # 🔍 階段零：雙向檢索
     if session["step"] == "input_site_id":
         status, result = search_csv_database(raw_msg)
         
         if status == 'MATCH':
-            # 🎯 唯一匹配成功！不論是用站號還是站名搜到的
             session["site_id"] = str(result.get("site_id", "既存站號"))
             session["site_name"] = str(result.get("site_name", "既存站台"))
             session["ac_phase"] = "3P4W" if "3P4W" in str(result.get("ac_phase", "")).upper() else "1P3W"
             
-            # 解析既有射頻設備 (格式: FXDB:3,FHEB:3)
             exist_equip_str = str(result.get("exist_equip", "")).strip()
             parsed_equip = {}
             if exist_equip_str and ":" in exist_equip_str:
@@ -155,7 +154,6 @@ def handle_message(event):
             session["equipments"] = parsed_equip
             session["step"] = "input_equip"
             
-            # 呈現既有明細
             exist_str = ""
             for k, v in session["equipments"].items():
                 exist_str += f"• {EQUIPMENT_DATABASE[k]['name']}: {v}台\n"
@@ -170,33 +168,31 @@ def handle_message(event):
                 f"📋 既有存檔設備明細：\n{exist_str}\n"
                 f" -----------------------------------\n"
                 f"【步驟 2：請繼續追加「新設」射頻設備】\n"
-                f"請輸入型號與數量進行累加（大小寫皆可，如：avql 3）。\n"
+                f"請輸入型號與數量進行累加（大小寫皆可，如：arda 3）。\n"
                 f"全數調整完畢後，請輸入【計算】。"
             )
             
         elif status == 'MULTI':
-            # ⚠️ 搜到多個類似站名，請使用者重新精準輸入
             reply_text = "⚠️ 【搜尋到多個類似站台名稱】\n請輸入更完整的字眼重新搜尋：\n\n"
-            for row in result[:10]: # 最多列出前10筆
+            for row in result[:10]:
                 reply_text += f"• 站號: {row.get('site_id')} | 站名: {row.get('site_name')}\n"
             
         else:
-            # 🔴 雙向都搜尋不到，判定為「新站建設模式」
             session["step"] = "input_site_name"
-            session["site_name"] = raw_msg # 直接將剛才打的字當作新站名
-            session["step"] = "input_equip" # 跳過站名輸入，直接進設備階段
+            session["site_name"] = raw_msg 
+            session["step"] = "input_equip" 
             reply_text = (
                 f"🔎 關鍵字【 {raw_msg} 】於資料庫中查無紀錄。\n"
                 f"⚙️ 系統已自動切換至 ➡️ 【 🟢 新站建設模式 】\n"
                 f"✅ 新設站台名稱暫定為：【 {raw_msg} 】\n\n"
                 f"【步驟 2：請輸入新設射頻設備】\n"
-                f"請直接輸入型號與數量（大小寫皆可，如：avql 3），確認好設備後輸入【計算】。"
+                f"請直接輸入型號與數量（大小寫皆可，如：arda 3），確認好設備後輸入【計算】。"
             )
             
         line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply_text))
         return
 
-    # 階段一：處理設備輸入 (支援大小寫與累加)
+    # 階段一：處理設備輸入
     elif session["step"] == "input_equip":
         if user_msg == "計算":
             if not session["equipments"]:
@@ -237,7 +233,7 @@ def handle_message(event):
                     return
         except ValueError:
             pass
-        line_bot_api.reply_message(event.reply_token, TextSendMessage(text="⚠️ 請輸入「型號 數量」(如：avql 3)，或輸入「計算」。"))
+        line_bot_api.reply_message(event.reply_token, TextSendMessage(text="⚠️ 請輸入「型號 數量」(如：arda 3)，或輸入「計算」。"))
 
     # 階段二：選擇 AC 供電相別
     elif session["step"] == "select_ac_phase":
@@ -324,13 +320,12 @@ def handle_message(event):
                 phase_title = "單相三線 (1P3W 220V)"
                 nfb_poles = "2P"
             else:
-                phase_title = "三相四線 (3P4W 380V -> 實務抓單相 RST+N 220V)"
-                nfb_poles = "2P (RST單相配N)"
+                phase_title = "開關使用 2P (RST單相配N)"
             
             ac_current = ac_total_w / (220 * pf)
             calculated_nfb = math.ceil(ac_current * 1.25)
             
-            # 電工法規導線管內安全安培容量限制判定：
+            # 電工法規安全電流線徑判定：
             if calculated_nfb <= 30:
                 suggested_nfb = 30
                 suggested_wire = "8.0 mm²"  
@@ -366,7 +361,7 @@ def handle_message(event):
                 f" ⚡ 3. 交流供電系統統計 ({phase_title})\n"
                 f"   • SMR 常態交流側總功耗: {ac_total_w:.0f} W\n"
                 f"   • 現場基本運轉線電流: {ac_current:.2f} A\n"
-                f"   👉 建議 NFB 開關規格: {suggested_nfb} A {nfb_poles}\n"
+                f"   👉 建議 NFB 開關規格: {suggested_nfb} A 2P\n"
                 f"   👉 現場拉線進線線徑: {suggested_wire} (30A內保底8.0mm²，30A以上依法規以此類推)\n"
                 f" -----------------------------------\n"
                 f" 📊 4. 預估現場日常耗電度數 (台電計費基準)\n"
@@ -376,65 +371,6 @@ def handle_message(event):
             )
             
             USER_SESSIONS[user_id] = {"step": "input_site_id", "site_id": "未知站號", "site_name": "未命名站台", "equipments": {}, "ac_phase": "1P3W", "chosen_smrs": []}
-            line_bot_api.reply_message(event.reply_token, TextSendMessage(text=report))
-            return
-        else:
-            line_bot_api.reply_message(event.reply_token, TextSendMessage(text="⚠️ 請輸入正確的直流設備代號數字 (1、2、3 或 4)。"))
-
-if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5000)
-            else:
-                phase_title = "三相四線 (3P4W 380V -> 實務抓單相 RST+N 220V)"
-                nfb_poles = "2P (RST單相配N)"
-            
-            ac_current = ac_total_w / (220 * pf)
-            calculated_nfb = math.ceil(ac_current * 1.25)
-            
-            # 電工法規導線管內安培容量判定：
-            if calculated_nfb <= 30:
-                suggested_nfb = 30
-                suggested_wire = "8.0 mm²"  
-            elif calculated_nfb <= 50:
-                suggested_nfb = 50          
-                suggested_wire = "14 mm²"   
-            elif calculated_nfb <= 60:
-                suggested_nfb = 60
-                suggested_wire = "22 mm²"   
-            elif calculated_nfb <= 85:
-                suggested_nfb = 75 if calculated_nfb <= 75 else 100
-                suggested_wire = "38 mm²"   
-            else:
-                suggested_nfb = calculated_nfb
-                suggested_wire = "50 mm² 或以上"
-
-            ac_kwh_per_hour = ac_total_w / 1000.0
-            ac_kwh_per_month = ac_kwh_per_hour * 24 * 30
-            final_smr_config = " + ".join([smr["name"] for smr in session["chosen_smrs"]])
-
-            report = (
-                f"📋 【⚡ 基地台日常常態電力與度數報告】\n"
-                f"🏢 站台名稱：{session['site_name']}\n\n"
-                f" 🔹 1. 新設射頻清單：\n{session['detail_str']}\n"
-                f" -----------------------------------\n"
-                f" 🔋 2. 直流供電設備確認\n"
-                f"   • 主設備基本直流負載: {net_dc_load:.0f} W\n"
-                f"   • 直流端總電量需求: {total_dc_demand:.0f} W\n"
-                f"   👉 最終多機配置: 【 {final_smr_config} 】\n"
-                f"   👉 供電總瓦數能力: {current_total_capacity} W\n"
-                f" -----------------------------------\n"
-                f" ⚡ 3. 交流供電系統統計 ({phase_title})\n"
-                f"   • SMR 常態交流側總功耗: {ac_total_w:.0f} W\n"
-                f"   • 現場基本運轉線電流: {ac_current:.2f} A\n"
-                f"   👉 建議 NFB 開關規格: {suggested_nfb} A {nfb_poles}\n"
-                f"   👉 現場拉線進線線徑: {suggested_wire} (30A內保底8.0mm²，30A以上依法規以此類推)\n"
-                f" -----------------------------------\n"
-                f" 📊 4. 預估現場日常耗電度數 (台電計費基準)\n"
-                f"   • 每小時基本用電: {ac_total_w:.0f} W ➡️ 【 {ac_kwh_per_hour:.3f} 度電 / 小時 】\n"
-                f"   • 每月份預估總用電: 【 {ac_kwh_per_month:.1f} 度電 / 月 】\n\n"
-                f"💡 輸入「開始評估」可開啟下一座台的電力計算。"
-            )
-            
-            USER_SESSIONS[user_id] = {"step": "input_site_name", "site_name": "未命名站台", "equipments": {}, "ac_phase": "1P3W", "chosen_smrs": []}
             line_bot_api.reply_message(event.reply_token, TextSendMessage(text=report))
             return
         else:
