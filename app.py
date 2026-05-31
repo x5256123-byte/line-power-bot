@@ -40,7 +40,6 @@ def get_site_data():
         creds_json = os.environ.get("GOOGLE_CREDS_JSON")
         if not creds_json: return []
         creds_dict = json.loads(creds_json)
-        # 完整的授權範圍
         scope = [
             "https://spreadsheets.google.com/feeds",
             'https://www.googleapis.com/auth/spreadsheets',
@@ -58,11 +57,6 @@ def get_site_data():
         print(f"DEBUG: Sheets 連線異常: {e}")
         return []
 
-# --- 路由與功能 ---
-@app.route("/", methods=['GET'])
-def home():
-    return "Bot is running", 200
-
 @app.route("/callback", methods=['POST'])
 def callback():
     signature = request.headers.get('X-Line-Signature')
@@ -75,21 +69,33 @@ def callback():
 
 @handler.add(MessageEvent, message=TextMessage)
 def handle_message(event):
-    if not line_bot_api: return
     uid = event.source.user_id
     msg = event.message.text.strip().upper()
+    
     if msg in ["開始評估", "HELP", "0"]:
         USER_SESSIONS[uid] = {"step": "input_id", "equipments": {}}
         line_bot_api.reply_message(event.reply_token, TextSendMessage(text="請輸入站號："))
         return
+    
     session = USER_SESSIONS.get(uid, {"step": "input_id", "equipments": {}})
+    
     if session["step"] == "input_id":
         data = get_site_data()
-        results = [r for r in data if msg.strip() == str(r.get("台號", "")).strip()]
+        msg_clean = msg.strip()
+        
+        if not data:
+            line_bot_api.reply_message(event.reply_token, TextSendMessage(text="錯誤：無法讀取到試算表資料。"))
+            return
+            
+        sample = data[0].get("台號", "NULL")
+        results = [r for r in data if msg_clean == str(r.get("台號", "")).strip()]
+        
         if not results:
-            line_bot_api.reply_message(event.reply_token, TextSendMessage(text=f"查無此站 '{msg}'。"))
+            debug_msg = f"查無此站 '{msg_clean}'。\n\n[診斷資訊]\n1. 已讀取 {len(data)} 筆資料\n2. 第一筆台號原始資料為：'{sample}'\n請確認你輸入的站號是否與該欄位格式一致。"
+            line_bot_api.reply_message(event.reply_token, TextSendMessage(text=debug_msg))
         else:
             process_selection(uid, event.reply_token, results[0])
+    
     elif session["step"] == "input_equip":
         if msg == "計算":
             line_bot_api.reply_message(event.reply_token, TextSendMessage(get_report(session["site_name"], session["equipments"], "1P3W")))
