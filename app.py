@@ -48,7 +48,8 @@ def get_site_data():
         ]
         creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
         client = gspread.authorize(creds)
-        spreadsheet = client.open_by_key("14BwO3k0sP7v9S_s53Y58W50c-e2f9fH4p6g1aJ4T0hM")
+        # 使用正確的新 ID
+        spreadsheet = client.open_by_key("1GOPuTeocq6G0gj4AUMdPUiE84TicJhj0Qcwvn2Sjoe4")
         sheet = spreadsheet.worksheet("工作表1")
         data = sheet.get_all_records(head=2)
         print(f"DEBUG: 成功讀取 {len(data)} 筆資料")
@@ -71,31 +72,19 @@ def callback():
 def handle_message(event):
     uid = event.source.user_id
     msg = event.message.text.strip().upper()
-    
     if msg in ["開始評估", "HELP", "0"]:
         USER_SESSIONS[uid] = {"step": "input_id", "equipments": {}}
         line_bot_api.reply_message(event.reply_token, TextSendMessage(text="請輸入站號："))
         return
     
     session = USER_SESSIONS.get(uid, {"step": "input_id", "equipments": {}})
-    
     if session["step"] == "input_id":
         data = get_site_data()
-        msg_clean = msg.strip()
-        
-        if not data:
-            line_bot_api.reply_message(event.reply_token, TextSendMessage(text="錯誤：無法讀取到試算表資料。"))
-            return
-            
-        sample = data[0].get("台號", "NULL")
-        results = [r for r in data if msg_clean == str(r.get("台號", "")).strip()]
-        
+        results = [r for r in data if msg.strip() == str(r.get("台號", "")).strip()]
         if not results:
-            debug_msg = f"查無此站 '{msg_clean}'。\n\n[診斷資訊]\n1. 已讀取 {len(data)} 筆資料\n2. 第一筆台號原始資料為：'{sample}'\n請確認你輸入的站號是否與該欄位格式一致。"
-            line_bot_api.reply_message(event.reply_token, TextSendMessage(text=debug_msg))
+            line_bot_api.reply_message(event.reply_token, TextSendMessage(text=f"查無此站 '{msg}'，請確認 Google Sheet 是否已共用給服務帳號。"))
         else:
             process_selection(uid, event.reply_token, results[0])
-    
     elif session["step"] == "input_equip":
         if msg == "計算":
             line_bot_api.reply_message(event.reply_token, TextSendMessage(get_report(session["site_name"], session["equipments"], "1P3W")))
@@ -109,17 +98,4 @@ def get_report(site_name, equipments, ac_phase):
     bbu_p = 400
     total_rf = sum(EQUIPMENT_DATABASE[m]["power"] * q for m, q in equipments.items() if m in EQUIPMENT_DATABASE)
     net_dc = bbu_p + total_rf
-    nfb = max(30, min(100, (math.ceil(((net_dc / 0.92) / (220 * 0.9) * 1.25)/10)*10)))
-    wire = "8.0 mm²" if nfb <= 30 else ("14 mm²" if nfb <= 50 else "22 mm²")
-    details = "\n".join([f"• {EQUIPMENT_DATABASE[m]['name']} x {q}台" for m, q in equipments.items()])
-    return f"🔍 【站台：{site_name}】\n總負載: {net_dc:.0f} W\n建議 NFB: {nfb} A\n建議線徑: {wire}\n\n輸入「0」返回，或「型號 數量」追加。"
-
-def process_selection(uid, token, r):
-    site_name = f"{r.get('台名', '未知')}-{r.get('(模組位置 / 光接點)', '未知')}"
-    equipments = {m: 1 for m in EQUIPMENT_DATABASE if m in str(r.get("模組型號", "")).upper()}
-    USER_SESSIONS[uid] = {"step": "input_equip", "site_name": site_name, "equipments": equipments}
-    line_bot_api.reply_message(token, TextSendMessage(text=f"已載入 {site_name}。\n輸入「計算」顯示報告，或「型號 數量」追加。"))
-
-if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 8080))
-    app.run(host="0.0.0.0", port=port)
+    nfb = max(30, min(100, (math.ceil(((net_dc / 0.92) / (220 * 0.9) *
