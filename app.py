@@ -43,12 +43,15 @@ def get_site_data():
         scope = ["https://spreadsheets.google.com/feeds", 'https://www.googleapis.com/auth/spreadsheets']
         creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
         client = gspread.authorize(creds)
-        sheet = client.open("x5256123").sheet1
-        return sheet.get_all_records()
+        
+        # 使用 open 改用 key，並直接抓取第一個工作表
+        sheet = client.open_by_key("14BwO3k0sP7v9S_s53Y58W50c-e2f9fH4p6g1aJ4T0hM").get_worksheet(0)
+        
+        data = sheet.get_all_records()
+        return data
     except Exception as e:
         print(f"DEBUG: Sheets 連線異常: {e}")
         return []
-
 @app.route("/", methods=['GET'])
 def home():
     return "Bot is running", 200
