@@ -17,7 +17,7 @@ handler = WebhookHandler(LINE_CHANNEL_SECRET)
 # --- 本地 CSV 檔案路徑 ---
 CSV_FILE_PATH = os.path.join(os.path.dirname(__file__), "pingtung_sites.csv")
 
-# --- 🎯 射頻設備日常運轉基本功耗資料庫 (完全對齊您最終核定瓦數) ---
+# --- 🎯 射頻設備日常運轉基本功耗資料庫 ---
 EQUIPMENT_DATABASE = {
     # 宏基站 (Macro Cell) 既存規格
     "FXDB": {"name": "FXDB", "power": 780},
@@ -143,18 +143,15 @@ def calculate_current_report(site_id, site_name, ac_phase, equipments):
     net_dc_load = bbu_p + total_rf_power
     smr_efficiency = 0.92
     pf = 0.90
-    ac_total_w = total_dc_demand = net_dc_load 
-    ac_total_w_calc = total_dc_demand / smr_efficiency
     
-    phase_title = "單相三線 (1P3W 220V)" if ac_phase == "1P3W" else "三相四線 (3P4W -> 實務抓單相 RST+N)"
+    ac_total_w_calc = net_dc_load / smr_efficiency
     ac_current = ac_total_w_calc / (220 * pf)
     calculated_nfb = math.ceil(ac_current * 1.25)
     
     if calculated_nfb <= 30:
         suggested_nfb, suggested_wire = 30, "8.0 mm²"
     elif calculated_nfb <= 50:
-        suggested_nfb, simulated_wire = 50, "14 mm²"
-        suggested_wire = simulated_wire
+        suggested_nfb, suggested_wire = 50, "14 mm²"
     elif calculated_nfb <= 60:
         suggested_nfb, suggested_wire = 60, "22 mm²"
     elif calculated_nfb <= 85:
@@ -167,7 +164,8 @@ def calculate_current_report(site_id, site_name, ac_phase, equipments):
     ac_kwh_per_month = ac_kwh_per_hour * 24 * 30
     detail_str = "\n".join(detail_list) if detail_list else "   • 無既存或相符之射頻設備"
 
-    # 🎯 變更點：修正內部的變更與呼叫，確保字串變數安全閉合
+    phase_title = "單相三線 (1P3W 220V)" if ac_phase == "1P3W" else "三相四線 (3P4W -> 實務抓單相 RST+N)"
+
     report = (
         f"🔍 【資料庫檢索——站台歷史現況報告】\n"
         f"🏢 台號：{site_id}\n"
@@ -191,6 +189,7 @@ def calculate_current_report(site_id, site_name, ac_phase, equipments):
     )
     return report
 
+# 💡 修正：移除了重複的多餘 callback 區塊，確保 WebhookHandler 唯一入口
 @app.route("/callback", methods=['POST'])
 def callback():
     signature = request.headers.get('X-Signature') or request.headers.get('X-Line-Signature')
@@ -237,4 +236,194 @@ def handle_message(event):
         if status == 'MATCH':
             session["site_id"] = result["site_id"]
             session["site_name"] = result["site_name"]
-            session["ac_phase"] = result
+            session["ac_phase"] = result["ac_phase"]
+            session["equipments"] = result["equipments"]
+            session["step"] = "input_equip" 
+            
+            reply_text = calculate_current_report(
+                session["site_id"], session["site_name"], session["ac_phase"], session["equipments"]
+            )
+            
+        elif status == 'MULTI':
+            reply_text = "⚠️ 【搜尋到多個類似站台名稱】\n請輸入更完整的字眼重新搜尋：\n\n"
+            for row in result[:10]:
+                reply_text += f"• 台號: {row['site_id']} | 台名: {row['site_name']}\n"
+            
+        else:
+            session["step"] = "ask_not_found_options"
+            session["failed_keyword"] = raw_msg  
+            reply_text = (
+                f"🔎 關鍵字【 {raw_msg} 】於資料庫中查無紀錄！\n"
+                f"-----------------------------------\n"
+                f"請回覆代號數字【1 或 2】決定後續操作：\n\n"
+                f"【1】 🔄 重新搜尋（我可能打錯字了）\n"
+                f"【2】 🟢 新增站台（這是一座全新的新站）\n\n"
+                f"💡 輸入 【0】 亦可直接退回重新輸入。"
+            )
+            
+        line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply_text))
+        return
+
+    # 智慧選單關卡：查無紀錄時的二選一抉擇 (支援輸入 0 或 1 返回)
+    elif session["step"] == "ask_not_found_options":
+        if user_msg == "0" or user_msg == "1":
+            session["step"] = "input_site_id"
+            reply_text = "🔄 已返回。請重新輸入正確的【站號 或 站台名稱關鍵字】："
+        elif user_msg == "2":
+            session["step"] = "input_equip"
+            session["site_id"] = "NEW_SITE"
+            session["site_name"] = session["failed_keyword"]
+            reply_text = (
+                f"⚙️ 系統已成功切換至 ➡️ 【 🟢 新站建設模式 】\n"
+                f"✅ 全新站台名稱已設定：【 {session['site_name']} 】\n\n"
+                f"【步驟 2：請輸入新設射頻設備】\n"
+                f"請直接輸入型號與數量（大小寫皆可，如：fwhn 3），確認好設備後輸入【計算】。\n"
+                f"💡 輸入 【0】 可直接退回重新輸入站號。"
+            )
+        else:
+            reply_text = "⚠️ 輸入無效！請回覆 【1】 重新搜尋，【2】 新增全新站台，或回覆 【0】 退回起點。"
+            
+        line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply_text))
+        return
+
+    # 階段一：處理新設/追加設備輸入 (支援 0 返回)
+    elif session["step"] == "input_equip":
+        if user_msg == "0":
+            session["step"] = "input_site_id"
+            session["equipments"] = {}
+            reply_text = "🔄 已返回。請重新輸入【站號 或 站台名稱關鍵字】："
+            line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply_text))
+            return
+
+        if user_msg == "計算":
+            if not session["equipments"]:
+                line_bot_api.reply_message(event.reply_token, TextSendMessage(text="❌ 目前清單是空的，請先輸入設備。"))
+                return
+            
+            session["step"] = "select_ac_phase"
+            reply_text = (
+                f"🏢 站號：{session['site_id']} | 站名：{session['site_name']}\n\n"
+                f"【步驟 3：請選擇現場交流供電相別】\n"
+                f"請直接回覆代號數字【1 或 2】:\n"
+                f"【1】 🔴 單相三線 (1P3W 220V)\n"
+                f"【2】 🔵 三相四線 (3P4W 380V) - 實務抓 RST 任一相配 N 相接法\n\n"
+                f"💡 輸入 【0】 可退回上一步調整設備。"
+            )
+            line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply_text))
+            return
+
+        try:
+            parts = user_msg.split()
+            if len(parts) == 2:
+                model, qty_str = parts[0], parts[1]
+                if model in EQUIPMENT_DATABASE:
+                    qty = int(qty_str)
+                    if qty < 0: raise ValueError
+                    
+                    if qty == 0:
+                        if model in session["equipments"]:
+                            del session["equipments"][model]
+                        reply = f"已從清單中移除 {model}。"
+                    else:
+                        session["equipments"][model] = session["equipments"].get(model, 0) + qty
+                        reply = f"✅ 已記錄：{EQUIPMENT_DATABASE[model]['name']} 追加變更共 {session['equipments'][model]} 台。\n調整後完整清單：\n"
+                        for k, v in session["equipments"].items():
+                            reply += f"• {EQUIPMENT_DATABASE[k]['name']}: {v}台\n"
+                        reply += "\n輸入【計算】選擇供電相別，或輸入【0】重新搜尋。"
+                    
+                    line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply))
+                    return
+        except ValueError:
+            pass
+        line_bot_api.reply_message(event.reply_token, TextSendMessage(text="⚠️ 請輸入「型號 數量」(如：arda 3)，或輸入「計算」。\n輸入「0」可退回起點。"))
+
+    # 階段二：選擇 AC 供電相別 (支援 0 返回)
+    elif session["step"] == "select_ac_phase":
+        if user_msg == "0":
+            session["step"] = "input_equip"
+            reply_text = "🔄 已退回設備編輯階段。請繼續追加射頻設備，或輸入【計算】推進："
+            line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply_text))
+            return
+
+        if user_msg in ["1", "2"]:
+            session["ac_phase"] = "1P3W" if user_msg == "1" else "3P4W"
+            
+            bbu_p = 400  
+            total_rf_power = 0
+            detail_list = []
+
+            for model, qty in session["equipments"].items():
+                spec = EQUIPMENT_DATABASE[model]
+                row_total = spec["power"] * qty
+                total_rf_power += row_total
+                detail_list.append(f"   • {spec['name']} x {qty}台 = {row_total} W")
+
+            net_dc_load = bbu_p + total_rf_power
+            total_dc_demand = net_dc_load 
+
+            dc_kwh_per_hour = total_dc_demand / 1000.0
+            dc_kwh_per_month = dc_kwh_per_hour * 24 * 30
+
+            session["net_dc_load"] = net_dc_load
+            session["total_dc_demand"] = total_dc_demand
+            session["detail_str"] = "\n".join(detail_list)
+            
+            session["step"] = "select_smr"
+            session["chosen_smrs"] = []
+
+            phase_name = "單相三線 220V" if session["ac_phase"] == "1P3W" else "三相四線 (實務抓單相 RST+N 220V)"
+
+            reply_text = (
+                f"🏢 站台：[{session['site_id']}] {session['site_name']}\n"
+                f"⚡ 供電相別：{phase_name}\n"
+                f"🔋 【變更調整後——日常基本直流電量與度數統計】\n\n"
+                f"設備常態直流明細：\n{session['detail_str']}\n"
+                f" -----------------------------------\n"
+                f" • 主設備直流負載總和: {net_dc_load:.0f} W\n"
+                f" ⚡ 直流端總電量需求: {total_dc_demand:.0f} W ({total_dc_demand/1000:.2f} kW)\n"
+                f" 📊 直流端每小時耗電: {dc_kwh_per_hour:.3f} 度電\n"
+                f" 📊 直流端每月預估耗電: {dc_kwh_per_month:.1f} 度電\n"
+                f" -----------------------------------\n\n"
+                f"【步驟 4：請選填直流供電設備（支援多機累加）】\n"
+                f"請直接回覆代號數字【1 ~ 4】:\n"
+                f"【1】 TYPE 1 (2.0 kW)\n"
+                f"【2】 SMR (5.0 kW)\n"
+                f"【3】 TYPE 3 (6.0 kW)\n"
+                f"【4】 SMR (7.5 kW)\n\n"
+                f"💡 輸入 【0】 可退回上一步重選交流相別。"
+            )
+            line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply_text))
+            return
+        else:
+            line_bot_api.reply_message(event.reply_token, TextSendMessage(text="⚠️ 請回覆 1 選擇單相三線，或回覆 2 選擇三相四線。\n輸入「0」可退回上一步。"))
+
+    # 階段三：手選直流設備 (多機累加與最終防呆報告)
+    elif session["step"] == "select_smr":
+        if user_msg == "0":
+            session["step"] = "select_ac_phase"
+            reply_text = (
+                f"🔄 已退回供電相別階段。\n"
+                f"請重新回覆供電相別代號數字【1 或 2】:\n"
+                f"【1】 🔴 單相三線 (1P3W 220V)\n"
+                f"【2】 🔵 三相四線 (3P4W 380V)"
+            )
+            line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply_text))
+            return
+
+        if user_msg in SMR_DATABASE:
+            chosen_smr_spec = SMR_DATABASE[user_msg]
+            session["chosen_smrs"].append(chosen_smr_spec)
+
+            current_total_capacity = sum([smr["capacity"] for smr in session["chosen_smrs"]])
+            total_dc_demand = session["total_dc_demand"]
+
+            if current_total_capacity < total_dc_demand:
+                remaining_w = total_dc_demand - current_total_capacity
+                chosen_names = " + ".join([smr["name"] for smr in session["chosen_smrs"]])
+                loop_reply = (
+                    f"⚡ 【直流供電容量仍有不足！】\n\n"
+                    f" • 目前已選配置: {chosen_names}\n"
+                    f" 🔋 目前累計總供電容量: {current_total_capacity:.0f} W\n"
+                    f" ⚠️ 缺額尚差: 🔴 【 {remaining_w:.0f} W 】\n"
+                    f" -----------------------------------\n\n"
+                    f"【
