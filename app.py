@@ -13,12 +13,20 @@ line_bot_api = LineBotApi(os.environ.get("LINE_CHANNEL_ACCESS_TOKEN"))
 handler = WebhookHandler(os.environ.get("LINE_CHANNEL_SECRET"))
 CSV_FILE_PATH = os.path.join(os.path.dirname(__file__), "pingtung_sites.csv")
 
+# --- 設備資料庫 ---
 EQUIPMENT_DATABASE = {
-    "FXDB": {"name": "FXDB", "power": 780}, "FHDB": {"name": "FHDB", "power": 780},
-    "ARDA": {"name": "ARDA", "power": 480}, "FRHG": {"name": "FRHG", "power": 490},
-    "FHEL": {"name": "FHEL", "power": 350}, "FWHN": {"name": "FWHN", "power": 95},
+    "FXDB": {"name": "FXDB", "power": 780}, "ARDA": {"name": "ARDA", "power": 480},
+    "FHDB": {"name": "FHDB", "power": 780}, "AHDB": {"name": "AHDB", "power": 410},
+    "FXEB": {"name": "FXEB", "power": 915}, "FXED": {"name": "FXED", "power": 860},
     "FHEB": {"name": "FHEB", "power": 410}, "AHEB": {"name": "AHEB", "power": 410},
-    "AHDB": {"name": "AHDB", "power": 410}
+    "FHEL": {"name": "FHEL", "power": 350}, "FRHG": {"name": "FRHG", "power": 490},
+    "AHHB": {"name": "AHHB", "power": 321}, "AZQG": {"name": "AZQG", "power": 720},
+    "AZQI": {"name": "AZQI", "power": 520}, "AEQZ": {"name": "AEQZ", "power": 570},
+    "AQQA": {"name": "AQQA", "power": 2095}, "AQQY": {"name": "AQQY", "power": 740},
+    "AVQC": {"name": "AVQC", "power": 900}, "AVQL": {"name": "AVQL", "power": 380},
+    "AHEGB": {"name": "AHEGB", "power": 1367}, "AHEGG": {"name": "AHEGG", "power": 410},
+    "FW2EHB": {"name": "FW2EHB", "power": 210}, "FWHN": {"name": "FWHN", "power": 95},
+    "AWHQE": {"name": "AWHQE", "power": 285}
 }
 
 USER_SESSIONS = {}
@@ -31,6 +39,7 @@ def get_report(site_name, equipments, ac_phase):
     ac_curr = ac_w / (220 * 0.9)
     nfb = max(30, min(100, (math.ceil((ac_curr * 1.25)/10)*10)))
     wire = "8.0 mm²" if nfb <= 30 else ("14 mm²" if nfb <= 50 else "22 mm²")
+    
     details = "\n".join([f"• {EQUIPMENT_DATABASE[m]['name']} x {q}台" for m, q in equipments.items()])
     return (f"🔍 【站台：{site_name}】\n供電：{'單相三線' if ac_phase=='1P3W' else '三相四線'}\n\n設備清單：\n{details}\n"
             f"-------------------\n總負載: {net_dc:.0f} W\n建議 NFB: {nfb} A\n建議線徑: {wire}\n\n輸入「0」返回。")
@@ -59,19 +68,21 @@ def handle_message(event):
         parts = msg.split()
         sid_q = parts[0]
         loc_q = parts[1] if len(parts) > 1 else ""
-        
         results = []
         try:
             with open(CSV_FILE_PATH, encoding='utf-8-sig') as f:
                 for r in csv.DictReader(f):
                     if sid_q in str(r.get("台號", "")):
-                        loc = r.get("(模組位置 / 光接點)", "未知位置")
-                        if not loc_q or loc_q in loc:
+                        loc_full = r.get("(模組位置 / 光接點)", "未知位置")
+                        loc_name = loc_full.split('/')[-1].strip()
+                        if not loc_q or loc_q in loc_name.upper():
                             results.append({
-                                "name": f"{r['台名']}-{loc.split('/')[-1].strip()}",
+                                "name": f"{r.get('台名', '未知')}-{loc_name}",
                                 "equip": r.get("模組型號", "").split('_')[0]
                             })
-        except: pass
+        except Exception as e:
+            line_bot_api.reply_message(event.reply_token, TextSendMessage(text=f"錯誤: {str(e)}"))
+            return
         
         unique = {r['name']: r for r in results}.values()
         results = list(unique)
@@ -100,3 +111,4 @@ def handle_message(event):
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=10000)
+    
