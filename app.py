@@ -14,6 +14,11 @@ line_bot_api = LineBotApi(os.environ.get("LINE_CHANNEL_ACCESS_TOKEN"))
 handler = WebhookHandler(os.environ.get("LINE_CHANNEL_SECRET"))
 USER_SESSIONS = {}
 
+# --- 根路由 (解決 404 問題，讓 Render 偵測到服務) ---
+@app.route("/", methods=['GET'])
+def home():
+    return "Bot is running", 200
+
 # --- 設備資料庫 ---
 EQUIPMENT_DATABASE = {
     "FXDB": {"name": "FXDB", "power": 780}, "ARDA": {"name": "ARDA", "power": 480},
@@ -30,20 +35,20 @@ EQUIPMENT_DATABASE = {
     "AWHQE": {"name": "AWHQE", "power": 285}
 }
 
-# --- Google Sheets 連接 (防禦性寫法) ---
+# --- Google Sheets 連接 ---
 def get_site_data():
     try:
         scope = ["https://spreadsheets.google.com/feeds", 'https://www.googleapis.com/auth/spreadsheets']
-        if not os.path.exists('credentials.json'):
-            return []
         creds = ServiceAccountCredentials.from_json_keyfile_name('credentials.json', scope)
         client = gspread.authorize(creds)
-        sheet = client.open("你的 Google Sheet 名稱").sheet1
+        # 修改這裡為你的正確試算表名稱
+        sheet = client.open("x5256123").sheet1
         return sheet.get_all_records()
     except Exception as e:
-        print(f"Error connecting to Google Sheets: {e}")
+        print(f"DEBUG: Sheets 連線異常: {e}")
         return []
 
+# --- 功能函式 ---
 def get_report(site_name, equipments, ac_phase):
     bbu_p = 400
     total_rf = sum(EQUIPMENT_DATABASE[m]["power"] * q for m, q in equipments.items() if m in EQUIPMENT_DATABASE)
@@ -76,9 +81,10 @@ def handle_message(event):
     
     if session["step"] == "input_id":
         data = get_site_data()
+        # 嚴格對應你試算表的標題名稱
         results = [r for r in data if msg in str(r.get("台號", ""))]
         if not results:
-            line_bot_api.reply_message(event.reply_token, TextSendMessage(text="查無此站，請確認 Google Sheet 資料已同步。"))
+            line_bot_api.reply_message(event.reply_token, TextSendMessage(text="查無此站，請檢查 Google Sheet 資料。"))
         else:
             process_selection(uid, event.reply_token, results[0])
             
@@ -91,10 +97,11 @@ def handle_message(event):
                 m, q = parts[0], int(parts[1])
                 session["equipments"][m] = session["equipments"].get(m, 0) + q
                 USER_SESSIONS[uid] = session
-                line_bot_api.reply_message(event.reply_token, TextSendMessage(text=f"已更新 {m}，共 {session['equipments'][m]} 台。"))
+                line_bot_api.reply_message(event.reply_token, TextSendMessage(text=f"已追加 {m}，共 {session['equipments'][m]} 台。"))
 
 def process_selection(uid, token, r):
-    site_name = f"{r.get('台名', '未知')}-{r.get('模組位置', '未知')}"
+    # 嚴格對應你試算表內的標題名稱
+    site_name = f"{r.get('台名', '未知')}-{r.get('(模組位置 / 光接點)', '未知')}"
     equipments = {}
     raw_model = str(r.get("模組型號", "")).upper()
     for db_model in EQUIPMENT_DATABASE:
@@ -102,8 +109,8 @@ def process_selection(uid, token, r):
             equipments[db_model] = equipments.get(db_model, 0) + 1
     
     USER_SESSIONS[uid] = {"step": "input_equip", "site_name": site_name, "equipments": equipments}
-    line_bot_api.reply_message(token, TextSendMessage(text=f"已載入 {site_name}。\n輸入「計算」顯示報告，或「型號 數量」追加。"))
+    line_bot_api.reply_message(token, TextSendMessage(text=f"已載入 {site_name}。\n共 {sum(equipments.values())} 台。\n輸入「計算」顯示報告，或「型號 數量」追加。"))
+
 if __name__ == "__main__":
-    # Render 會自動設定 PORT 環境變數
     port = int(os.environ.get("PORT", 8080))
     app.run(host="0.0.0.0", port=port)
