@@ -95,7 +95,7 @@ if session["step"] == "input_id":
         # ----------------
         
         results = [r for r in data if msg in str(r.get("台號", ""))]
-    elif session["step"] == "input_equip":
+        elif session["step"] == "input_equip":
         if msg == "計算":
             line_bot_api.reply_message(event.reply_token, TextSendMessage(text=get_report(session["site_name"], session["equipments"], "1P3W")))
         else:
