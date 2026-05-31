@@ -79,15 +79,22 @@ def handle_message(event):
     
     session = USER_SESSIONS.get(uid, {"step": "input_id", "equipments": {}})
     
-    if session["step"] == "input_id":
+if session["step"] == "input_id":
         data = get_site_data()
-        # 嚴格對應你試算表的標題名稱
-        results = [r for r in data if msg in str(r.get("台號", ""))]
-        if not results:
-            line_bot_api.reply_message(event.reply_token, TextSendMessage(text="查無此站，請檢查 Google Sheet 資料。"))
+        
+        # --- 除錯區塊 ---
+        if not data:
+            print("DEBUG: Google Sheet 讀取到的資料為空！")
         else:
-            process_selection(uid, event.reply_token, results[0])
-            
+            # 印出前兩筆資料，看看 Python 眼中看到的欄位名稱是什麼
+            print(f"DEBUG: 讀取到資料筆數: {len(data)}")
+            print(f"DEBUG: 第一筆資料內容: {data[0]}")
+            # 檢查你的搜尋邏輯是否正確
+            found_keys = [str(r.get("台號", "NULL")) for r in data]
+            print(f"DEBUG: 資料庫內所有的台號: {found_keys}")
+        # ----------------
+        
+        results = [r for r in data if msg in str(r.get("台號", ""))]
     elif session["step"] == "input_equip":
         if msg == "計算":
             line_bot_api.reply_message(event.reply_token, TextSendMessage(text=get_report(session["site_name"], session["equipments"], "1P3W")))
