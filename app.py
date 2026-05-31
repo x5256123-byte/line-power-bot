@@ -30,14 +30,19 @@ EQUIPMENT_DATABASE = {
     "AWHQE": {"name": "AWHQE", "power": 285}
 }
 
-# --- Google Sheets 連接 ---
+# --- Google Sheets 連接 (防禦性寫法) ---
 def get_site_data():
-    scope = ["https://spreadsheets.google.com/feeds", 'https://www.googleapis.com/auth/spreadsheets']
-    creds = ServiceAccountCredentials.from_json_keyfile_name('credentials.json', scope)
-    client = gspread.authorize(creds)
-    # 請填入你的 Google Sheet 名稱
-    sheet = client.open("你的 Google Sheet 名稱").sheet1
-    return sheet.get_all_records()
+    try:
+        scope = ["https://spreadsheets.google.com/feeds", 'https://www.googleapis.com/auth/spreadsheets']
+        if not os.path.exists('credentials.json'):
+            return []
+        creds = ServiceAccountCredentials.from_json_keyfile_name('credentials.json', scope)
+        client = gspread.authorize(creds)
+        sheet = client.open("你的 Google Sheet 名稱").sheet1
+        return sheet.get_all_records()
+    except Exception as e:
+        print(f"Error connecting to Google Sheets: {e}")
+        return []
 
 def get_report(site_name, equipments, ac_phase):
     bbu_p = 400
@@ -62,43 +67,21 @@ def callback():
 def handle_message(event):
     uid = event.source.user_id
     msg = event.message.text.strip().upper()
-    
     if msg in ["開始評估", "HELP", "0"]:
         USER_SESSIONS[uid] = {"step": "input_id", "equipments": {}}
-        line_bot_api.reply_message(event.reply_token, TextSendMessage(text="請輸入站號（例如：702069）："))
+        line_bot_api.reply_message(event.reply_token, TextSendMessage(text="請輸入站號："))
         return
-
+    
     session = USER_SESSIONS.get(uid, {"step": "input_id", "equipments": {}})
-
-    # 搜尋邏輯：從 Google Sheets 即時抓取
+    
     if session["step"] == "input_id":
         data = get_site_data()
-        results = []
-        for r in data:
-            if msg in str(r.get("台號", "")):
-                loc = str(r.get("模組位置", "未知")).split('/')[-1].strip().upper()
-                name = f"{r.get('台名', '未知')}-{loc}"
-                results.append({"name": name})
-        
-        unique = {r['name']: r for r in results}.values()
-        results = list(unique)
-
+        results = [r for r in data if msg in str(r.get("台號", ""))]
         if not results:
-            line_bot_api.reply_message(event.reply_token, TextSendMessage(text="查無此站。"))
-        elif len(results) > 1:
-            session["step"] = "select_site"
-            session["options"] = results
-            line_bot_api.reply_message(event.reply_token, TextSendMessage(text="找到多個位置，請輸入編號：\n" + "\n".join([f"{i+1}. {r['name']}" for i, r in enumerate(results)])))
-            USER_SESSIONS[uid] = session
+            line_bot_api.reply_message(event.reply_token, TextSendMessage(text="查無此站，請確認 Google Sheet 資料已同步。"))
         else:
-            process_selection(uid, event.reply_token, results[0]['name'])
-
-    elif session["step"] == "select_site":
-        try:
-            idx = int(msg) - 1
-            process_selection(uid, event.reply_token, session["options"][idx]['name'])
-        except: line_bot_api.reply_message(event.reply_token, TextSendMessage(text="編號錯誤。"))
-
+            process_selection(uid, event.reply_token, results[0])
+            
     elif session["step"] == "input_equip":
         if msg == "計算":
             line_bot_api.reply_message(event.reply_token, TextSendMessage(text=get_report(session["site_name"], session["equipments"], "1P3W")))
@@ -110,19 +93,16 @@ def handle_message(event):
                 USER_SESSIONS[uid] = session
                 line_bot_api.reply_message(event.reply_token, TextSendMessage(text=f"已更新 {m}，共 {session['equipments'][m]} 台。"))
 
-def process_selection(uid, token, selected_name):
+def process_selection(uid, token, r):
+    site_name = f"{r.get('台名', '未知')}-{r.get('模組位置', '未知')}"
     equipments = {}
-    data = get_site_data()
-    for r in data:
-        loc = str(r.get("模組位置", "未知")).split('/')[-1].strip().upper()
-        if f"{r.get('台名', '未知')}-{loc}" == selected_name:
-            raw_model = str(r.get("模組型號", "")).upper()
-            for db_model in EQUIPMENT_DATABASE:
-                if db_model in raw_model:
-                    equipments[db_model] = equipments.get(db_model, 0) + 1
+    raw_model = str(r.get("模組型號", "")).upper()
+    for db_model in EQUIPMENT_DATABASE:
+        if db_model in raw_model:
+            equipments[db_model] = equipments.get(db_model, 0) + 1
     
-    USER_SESSIONS[uid] = {"step": "input_equip", "site_name": selected_name, "equipments": equipments}
-    line_bot_api.reply_message(token, TextSendMessage(text=f"已載入 {selected_name}，共 {sum(equipments.values())} 台。\n輸入「計算」顯示報告，或「型號 數量」追加。"))
+    USER_SESSIONS[uid] = {"step": "input_equip", "site_name": site_name, "equipments": equipments}
+    line_bot_api.reply_message(token, TextSendMessage(text=f"已載入 {site_name}。\n輸入「計算」顯示報告，或「型號 數量」追加。"))
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=10000)
