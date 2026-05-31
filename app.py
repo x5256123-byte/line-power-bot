@@ -77,14 +77,33 @@ def handle_message(event):
     
     session = USER_SESSIONS.get(uid, {"step": "input_id", "equipments": {}})
     
-    if session["step"] == "input_id":
+ if session["step"] == "input_id":
         data = get_site_data()
-        results = [r for r in data if msg in str(r.get("台號", ""))]
+        
+        # --- 強制除錯：把所有讀到的資料印出來 ---
+        if not data:
+            print("DEBUG: 警告！讀取到的資料是空的")
+        else:
+            print(f"DEBUG: 成功讀取 {len(data)} 筆資料")
+            # 印出前兩筆資料結構，這能讓我們看到「台號」到底是字串還是數字
+            print(f"DEBUG: 第一筆原始資料結構: {data[0]}")
+            # 將所有台號印出，看看程式到底抓到什麼
+            all_ids = [str(r.get("台號", "")).strip() for r in data]
+            print(f"DEBUG: 資料庫內所有台號清單: {all_ids}")
+        # ------------------------------------
+
+        # 搜尋邏輯：強制轉字串、去除前後空格、強制轉大寫比對
+        results = []
+        for r in data:
+            db_id = str(r.get("台號", "")).strip()
+            search_id = msg.strip()
+            if search_id == db_id:
+                results.append(r)
+        
         if not results:
-            line_bot_api.reply_message(event.reply_token, TextSendMessage(text="查無此站，請檢查 Google Sheet。"))
+            line_bot_api.reply_message(event.reply_token, TextSendMessage(text="查無此站，請檢查 Google Sheet 資料。"))
         else:
             process_selection(uid, event.reply_token, results[0])
-            
     elif session["step"] == "input_equip":
         if msg == "計算":
             report = get_report(session["site_name"], session["equipments"], "1P3W")
