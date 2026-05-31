@@ -1,5 +1,6 @@
 import os
 import math
+import json
 import gspread
 from flask import Flask, request, abort
 from oauth2client.service_account import ServiceAccountCredentials
@@ -9,15 +10,13 @@ from linebot.models import MessageEvent, TextMessage, TextSendMessage
 
 app = Flask(__name__)
 
-# --- 設定 ---
-line_bot_api = LineBotApi(os.environ.get("LINE_CHANNEL_ACCESS_TOKEN"))
-handler = WebhookHandler(os.environ.get("LINE_CHANNEL_SECRET"))
-USER_SESSIONS = {}
+# --- 初始化 LINE ---
+def init_line():
+    token = os.environ.get("LINE_CHANNEL_ACCESS_TOKEN")
+    secret = os.environ.get("LINE_CHANNEL_SECRET")
+    return LineBotApi(token) if token else None, WebhookHandler(secret) if secret else None
 
-# --- 根路由 (解決 404 問題，讓 Render 偵測到服務) ---
-@app.route("/", methods=['GET'])
-def home():
-    return "Bot is running", 200
+line_bot_api, handler = init_line()
 
 # --- 設備資料庫 ---
 EQUIPMENT_DATABASE = {
@@ -35,20 +34,68 @@ EQUIPMENT_DATABASE = {
     "AWHQE": {"name": "AWHQE", "power": 285}
 }
 
-# --- Google Sheets 連接 ---
+USER_SESSIONS = {}
+
 def get_site_data():
     try:
+        creds_dict = json.loads(os.environ.get("GOOGLE_CREDS_JSON", "{}"))
+        if not creds_dict: return []
         scope = ["https://spreadsheets.google.com/feeds", 'https://www.googleapis.com/auth/spreadsheets']
-        creds = ServiceAccountCredentials.from_json_keyfile_name('credentials.json', scope)
+        creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
         client = gspread.authorize(creds)
-        # 修改這裡為你的正確試算表名稱
         sheet = client.open("x5256123").sheet1
         return sheet.get_all_records()
     except Exception as e:
         print(f"DEBUG: Sheets 連線異常: {e}")
         return []
 
-# --- 功能函式 ---
+@app.route("/", methods=['GET'])
+def home():
+    return "Bot is running", 200
+
+@app.route("/callback", methods=['POST'])
+def callback():
+    signature = request.headers.get('X-Line-Signature')
+    body = request.get_data(as_text=True)
+    try:
+        handler.handle(body, signature)
+    except InvalidSignatureError:
+        abort(400)
+    return 'OK'
+
+@handler.add(MessageEvent, message=TextMessage)
+def handle_message(event):
+    if not line_bot_api: return
+    uid = event.source.user_id
+    msg = event.message.text.strip().upper()
+    
+    if msg in ["開始評估", "HELP", "0"]:
+        USER_SESSIONS[uid] = {"step": "input_id", "equipments": {}}
+        line_bot_api.reply_message(event.reply_token, TextSendMessage(text="請輸入站號："))
+        return
+    
+    session = USER_SESSIONS.get(uid, {"step": "input_id", "equipments": {}})
+    
+    if session["step"] == "input_id":
+        data = get_site_data()
+        results = [r for r in data if msg in str(r.get("台號", ""))]
+        if not results:
+            line_bot_api.reply_message(event.reply_token, TextSendMessage(text="查無此站，請檢查 Google Sheet。"))
+        else:
+            process_selection(uid, event.reply_token, results[0])
+            
+    elif session["step"] == "input_equip":
+        if msg == "計算":
+            report = get_report(session["site_name"], session["equipments"], "1P3W")
+            line_bot_api.reply_message(event.reply_token, TextSendMessage(text=report))
+        else:
+            parts = msg.split()
+            if len(parts) == 2 and parts[0] in EQUIPMENT_DATABASE:
+                m, q = parts[0], int(parts[1])
+                session["equipments"][m] = session["equipments"].get(m, 0) + q
+                USER_SESSIONS[uid] = session
+                line_bot_api.reply_message(event.reply_token, TextSendMessage(text=f"已追加 {m}，共 {session['equipments'][m]} 台。"))
+
 def get_report(site_name, equipments, ac_phase):
     bbu_p = 400
     total_rf = sum(EQUIPMENT_DATABASE[m]["power"] * q for m, q in equipments.items() if m in EQUIPMENT_DATABASE)
@@ -60,54 +107,7 @@ def get_report(site_name, equipments, ac_phase):
     details = "\n".join([f"• {EQUIPMENT_DATABASE[m]['name']} x {q}台" for m, q in equipments.items()])
     return f"🔍 【站台：{site_name}】\n供電：{ac_phase}\n\n設備清單：\n{details}\n-------------------\n總負載: {net_dc:.0f} W\n建議 NFB: {nfb} A\n建議線徑: {wire}\n\n輸入「0」返回，或「型號 數量」追加。"
 
-@app.route("/callback", methods=['POST'])
-def callback():
-    try:
-        handler.handle(request.get_data(as_text=True), request.headers.get('X-Line-Signature'))
-    except InvalidSignatureError:
-        abort(400)
-    return 'OK'
-
-@handler.add(MessageEvent, message=TextMessage)
-def handle_message(event):
-    uid = event.source.user_id
-    msg = event.message.text.strip().upper()
-    if msg in ["開始評估", "HELP", "0"]:
-        USER_SESSIONS[uid] = {"step": "input_id", "equipments": {}}
-        line_bot_api.reply_message(event.reply_token, TextSendMessage(text="請輸入站號："))
-        return
-    
-    session = USER_SESSIONS.get(uid, {"step": "input_id", "equipments": {}})
-    
-if session["step"] == "input_id":
-        data = get_site_data()
-        
-        # --- 除錯區塊 ---
-        if not data:
-            print("DEBUG: Google Sheet 讀取到的資料為空！")
-        else:
-            # 印出前兩筆資料，看看 Python 眼中看到的欄位名稱是什麼
-            print(f"DEBUG: 讀取到資料筆數: {len(data)}")
-            print(f"DEBUG: 第一筆資料內容: {data[0]}")
-            # 檢查你的搜尋邏輯是否正確
-            found_keys = [str(r.get("台號", "NULL")) for r in data]
-            print(f"DEBUG: 資料庫內所有的台號: {found_keys}")
-        # ----------------
-        
-        results = [r for r in data if msg in str(r.get("台號", ""))]
-        elif session["step"] == "input_equip":
-        if msg == "計算":
-            line_bot_api.reply_message(event.reply_token, TextSendMessage(text=get_report(session["site_name"], session["equipments"], "1P3W")))
-        else:
-            parts = msg.split()
-            if len(parts) == 2 and parts[0] in EQUIPMENT_DATABASE:
-                m, q = parts[0], int(parts[1])
-                session["equipments"][m] = session["equipments"].get(m, 0) + q
-                USER_SESSIONS[uid] = session
-                line_bot_api.reply_message(event.reply_token, TextSendMessage(text=f"已追加 {m}，共 {session['equipments'][m]} 台。"))
-
 def process_selection(uid, token, r):
-    # 嚴格對應你試算表內的標題名稱
     site_name = f"{r.get('台名', '未知')}-{r.get('(模組位置 / 光接點)', '未知')}"
     equipments = {}
     raw_model = str(r.get("模組型號", "")).upper()
