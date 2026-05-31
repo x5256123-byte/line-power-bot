@@ -43,19 +43,30 @@ def get_site_data():
         scope = ["https://spreadsheets.google.com/feeds", 'https://www.googleapis.com/auth/spreadsheets']
         creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
         client = gspread.authorize(creds)
-        
-        # 開啟試算表與分頁
         spreadsheet = client.open_by_key("14BwO3k0sP7v9S_s53Y58W50c-e2f9fH4p6g1aJ4T0hM")
         sheet = spreadsheet.worksheet("工作表1")
-        
-        # 關鍵修正：head=2 告訴程式標題在第 2 列
         data = sheet.get_all_records(head=2)
-        
-        print(f"DEBUG: 成功讀取 {len(data)} 筆資料，標題列已設為第 2 列")
+        print(f"DEBUG: 成功讀取 {len(data)} 筆資料")
         return data
     except Exception as e:
         print(f"DEBUG: Sheets 連線異常: {e}")
         return []
+
+# --- 路由設定 (這就是解決 404 的關鍵) ---
+@app.route("/", methods=['GET'])
+def home():
+    return "Bot is running", 200
+
+@app.route("/callback", methods=['POST'])
+def callback():
+    signature = request.headers.get('X-Line-Signature')
+    body = request.get_data(as_text=True)
+    try:
+        handler.handle(body, signature)
+    except InvalidSignatureError:
+        abort(400)
+    return 'OK'
+
 @handler.add(MessageEvent, message=TextMessage)
 def handle_message(event):
     if not line_bot_api: return
@@ -72,17 +83,10 @@ def handle_message(event):
     if session["step"] == "input_id":
         data = get_site_data()
         msg_clean = msg.strip()
-        
-        # 暴力診斷：查看資料庫內到底有哪些台號
-        all_db_ids = [str(r.get("台號", "")).strip() for r in data]
-        print(f"DEBUG: 資料庫中的台號清單: {all_db_ids}") 
-        
         results = [r for r in data if msg_clean == str(r.get("台號", "")).strip()]
         
         if not results:
-            preview = ", ".join(all_db_ids[:3])
-            error_msg = f"查無此站 '{msg_clean}'。\n\n資料庫共有 {len(all_db_ids)} 筆資料。\n前 3 筆台號為：\n{preview}\n\n請檢查 Google Sheet 第一列是否為『台號』。"
-            line_bot_api.reply_message(event.reply_token, TextSendMessage(text=error_msg))
+            line_bot_api.reply_message(event.reply_token, TextSendMessage(text=f"查無此站 '{msg_clean}'。"))
         else:
             process_selection(uid, event.reply_token, results[0])
             
