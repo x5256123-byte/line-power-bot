@@ -42,7 +42,7 @@ def get_report(site_name, equipments, ac_phase):
     
     details = "\n".join([f"• {EQUIPMENT_DATABASE[m]['name']} x {q}台" for m, q in equipments.items()])
     return (f"🔍 【站台：{site_name}】\n供電：{'單相三線' if ac_phase=='1P3W' else '三相四線'}\n\n設備清單：\n{details}\n"
-            f"-------------------\n總負載: {net_dc:.0f} W\n建議 NFB: {nfb} A\n建議線徑: {wire}\n\n輸入「0」返回。")
+            f"-------------------\n總負載: {net_dc:.0f} W\n建議 NFB: {nfb} A\n建議線徑: {wire}\n\n輸入「0」返回，或「型號 數量」追加。")
 
 @app.route("/callback", methods=['POST'])
 def callback():
@@ -64,82 +64,65 @@ def handle_message(event):
 
     session = USER_SESSIONS.get(uid, {"step": "input_id", "equipments": {}})
 
-if session["step"] == "input_id":
+    if session["step"] == "input_id":
         parts = msg.split()
         sid_q = parts[0]
-        # 💡 將剩下的部分合併，確保即使輸入多個關鍵字也能匹配
-        loc_q = " ".join(parts[1:]).upper() if len(parts) > 1 else ""
-        
+        loc_q = " ".join(parts[1:]).upper()
         results = []
-        try:
-            with open(CSV_FILE_PATH, encoding='utf-8-sig') as f:
-                for r in csv.DictReader(f):
-                    # 1. 先篩選站號
-                    if sid_q in str(r.get("台號", "")):
-                        loc_full = r.get("(模組位置 / 光接點)", "未知位置")
-                        loc_name = loc_full.split('/')[-1].strip().upper()
-                        
-                        # 2. 如果使用者有輸入「泰隆」，就只保留包含泰隆的項目
-                        if not loc_q or loc_q in loc_name:
-                            results.append({
-                                "name": f"{r.get('台名', '未知')}-{loc_name}",
-                                "equip": r.get("模組型號", "").split('_')[0]
-                            })
-        except: pass
-        
-        # 移除重複，確保結果乾淨
-        unique = {r['name']: r for r in results}.values()
-        results = list(unique)
-
-        if not results:
-            line_bot_api.reply_message(event.reply_token, TextSendMessage(text="查無此站或位置，請確認站號或關鍵字。"))
-        elif len(results) > 1:
-            session["step"] = "select_site"
-            session["options"] = results
-            line_bot_api.reply_message(event.reply_token, TextSendMessage(text="找到以下位置，請輸入編號：\n" + "\n".join([f"{i+1}. {r['name']}" for i, r in enumerate(results[:9])])))
-            USER_SESSIONS[uid] = session
-        else:
-            # 直接載入該位置的所有設備加總
-            selected_name = results[0]['name']
-            equipments = {}
-            # 重新掃描 CSV 把該位置所有設備加總
-            with open(CSV_FILE_PATH, encoding='utf-8-sig') as f:
-                for r in csv.DictReader(f):
-                    loc_name = r.get("(模組位置 / 光接點)", "").split('/')[-1].strip().upper()
-                    if f"{r.get('台名', '未知')}-{loc_name}" == selected_name:
-                        m = r.get("模組型號", "").split('_')[0]
-                        equipments[m] = equipments.get(m, 0) + 1
-            
-            line_bot_api.reply_message(event.reply_token, TextSendMessage(text=get_report(selected_name, equipments, "1P3W")))
-        except Exception as e:
-            line_bot_api.reply_message(event.reply_token, TextSendMessage(text=f"錯誤: {str(e)}"))
-            return
+        with open(CSV_FILE_PATH, encoding='utf-8-sig') as f:
+            for r in csv.DictReader(f):
+                if sid_q in str(r.get("台號", "")):
+                    loc_name = r.get("(模組位置 / 光接點)", "未知").split('/')[-1].strip().upper()
+                    if not loc_q or loc_q in loc_name:
+                        results.append({"name": f"{r.get('台名', '未知')}-{loc_name}", "equip": r.get("模組型號", "")})
         
         unique = {r['name']: r for r in results}.values()
         results = list(unique)
 
         if not results:
-            line_bot_api.reply_message(event.reply_token, TextSendMessage(text="查無此站或位置，請確認站號或輸入更精確位置。"))
+            line_bot_api.reply_message(event.reply_token, TextSendMessage(text="查無此站，請確認站號。"))
         elif len(results) > 1:
             session["step"] = "select_site"
             session["options"] = results
             line_bot_api.reply_message(event.reply_token, TextSendMessage(text="找到多個位置，請輸入編號：\n" + "\n".join([f"{i+1}. {r['name']}" for i, r in enumerate(results[:9])])))
             USER_SESSIONS[uid] = session
         else:
-            line_bot_api.reply_message(event.reply_token, TextSendMessage(text=get_report(results[0]['name'], {results[0]['equip']: 1}, "1P3W")))
+            process_selection(uid, event.reply_token, results[0]['name'])
 
     elif session["step"] == "select_site":
         try:
             idx = int(msg) - 1
             if 0 <= idx < len(session["options"]):
-                s = session["options"][idx]
-                line_bot_api.reply_message(event.reply_token, TextSendMessage(text=get_report(s['name'], {s['equip']: 1}, "1P3W")))
-                USER_SESSIONS[uid] = {"step": "input_id", "equipments": {}}
+                process_selection(uid, event.reply_token, session["options"][idx]['name'])
             else:
-                line_bot_api.reply_message(event.reply_token, TextSendMessage(text="編號錯誤，請輸入正確數字。"))
-        except:
-            line_bot_api.reply_message(event.reply_token, TextSendMessage(text="請輸入數字編號。"))
+                line_bot_api.reply_message(event.reply_token, TextSendMessage(text="編號錯誤。"))
+        except: line_bot_api.reply_message(event.reply_token, TextSendMessage(text="請輸入數字編號。"))
+
+    elif session["step"] == "input_equip":
+        if msg == "計算":
+            line_bot_api.reply_message(event.reply_token, TextSendMessage(text=get_report(session["site_name"], session["equipments"], "1P3W")))
+        else:
+            parts = msg.split()
+            if len(parts) == 2 and parts[0] in EQUIPMENT_DATABASE:
+                m, q = parts[0], int(parts[1])
+                session["equipments"][m] = session["equipments"].get(m, 0) + q
+                USER_SESSIONS[uid] = session
+                line_bot_api.reply_message(event.reply_token, TextSendMessage(text=f"已更新 {m}，共 {session['equipments'][m]} 台。"))
+            else: line_bot_api.reply_message(event.reply_token, TextSendMessage(text="格式錯誤，請輸入「型號 數量」。"))
+
+def process_selection(uid, token, selected_name):
+    equipments = {}
+    with open(CSV_FILE_PATH, encoding='utf-8-sig') as f:
+        for r in csv.DictReader(f):
+            loc_name = r.get("(模組位置 / 光接點)", "未知").split('/')[-1].strip().upper()
+            if f"{r.get('台名', '未知')}-{loc_name}" == selected_name:
+                raw_model = r.get("模組型號", "").upper()
+                for db_model in EQUIPMENT_DATABASE:
+                    if db_model in raw_model:
+                        equipments[db_model] = equipments.get(db_model, 0) + 1
+    
+    USER_SESSIONS[uid] = {"step": "input_equip", "site_name": selected_name, "equipments": equipments}
+    line_bot_api.reply_message(token, TextSendMessage(text=f"已載入 {selected_name}，共 {sum(equipments.values())} 台。\n輸入「計算」顯示報告，或「型號 數量」追加。"))
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=10000)
-    
