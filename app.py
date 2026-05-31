@@ -99,3 +99,16 @@ def get_report(site_name, equipments, ac_phase):
     total_rf = sum(EQUIPMENT_DATABASE[m]["power"] * q for m, q in equipments.items() if m in EQUIPMENT_DATABASE)
     net_dc = bbu_p + total_rf
     nfb = max(30, min(100, (math.ceil(((net_dc / 0.92) / (220 * 0.9) * 1.25)/10)*10)))
+    wire = "8.0 mm²" if nfb <= 30 else ("14 mm²" if nfb <= 50 else "22 mm²")
+    details = "\n".join([f"• {EQUIPMENT_DATABASE[m]['name']} x {q}台" for m, q in equipments.items()])
+    return f"🔍 【站台：{site_name}】\n總負載: {net_dc:.0f} W\n建議 NFB: {nfb} A\n建議線徑: {wire}\n\n輸入「0」返回，或「型號 數量」追加。"
+
+def process_selection(uid, token, r):
+    site_name = f"{r.get('台名', '未知')}-{r.get('(模組位置 / 光接點)', '未知')}"
+    equipments = {m: 1 for m in EQUIPMENT_DATABASE if m in str(r.get("模組型號", "")).upper()}
+    USER_SESSIONS[uid] = {"step": "input_equip", "site_name": site_name, "equipments": equipments}
+    line_bot_api.reply_message(token, TextSendMessage(text=f"已載入 {site_name}。\n輸入「計算」顯示報告，或「型號 數量」追加。"))
+
+if __name__ == "__main__":
+    port = int(os.environ.get("PORT", 8080))
+    app.run(host="0.0.0.0", port=port)
