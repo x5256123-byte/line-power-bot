@@ -38,8 +38,9 @@ USER_SESSIONS = {}
 
 def get_site_data():
     try:
-        creds_dict = json.loads(os.environ.get("GOOGLE_CREDS_JSON", "{}"))
-        if not creds_dict: return []
+        creds_json = os.environ.get("GOOGLE_CREDS_JSON")
+        if not creds_json: return []
+        creds_dict = json.loads(creds_json)
         scope = ["https://spreadsheets.google.com/feeds", 'https://www.googleapis.com/auth/spreadsheets']
         creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
         client = gspread.authorize(creds)
@@ -62,7 +63,7 @@ def callback():
     except InvalidSignatureError:
         abort(400)
     return 'OK'
- 
+
 @handler.add(MessageEvent, message=TextMessage)
 def handle_message(event):
     if not line_bot_api: return
@@ -76,24 +77,18 @@ def handle_message(event):
     
     session = USER_SESSIONS.get(uid, {"step": "input_id", "equipments": {}})
     
-if session["step"] == "input_id":
+    if session["step"] == "input_id":
         data = get_site_data()
-        
-        # --- 除錯核心 ---
-        all_ids = []
-        for r in data:
-            val = r.get("台號", "")
-            all_ids.append(str(val))
-        print(f"DEBUG: 程式讀取到的所有台號: {all_ids}")
-        # ----------------
-        
         results = [r for r in data if msg in str(r.get("台號", ""))]
-        # ... 後續邏輯
-
+        if not results:
+            line_bot_api.reply_message(event.reply_token, TextSendMessage(text="查無此站，請檢查 Google Sheet。"))
+        else:
+            process_selection(uid, event.reply_token, results[0])
+            
     elif session["step"] == "input_equip":
         if msg == "計算":
             report = get_report(session["site_name"], session["equipments"], "1P3W")
-            line_bot_api.reply_message(event.reply_token, TextSendMessage(text=report))
+            line_bot_api.reply_message(event.reply_token, TextSendMessage(report))
         else:
             parts = msg.split()
             if len(parts) == 2 and parts[0] in EQUIPMENT_DATABASE:
