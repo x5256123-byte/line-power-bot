@@ -48,11 +48,20 @@ def get_site_data():
         ]
         creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
         client = gspread.authorize(creds)
-        # 使用正確的新 ID
         spreadsheet = client.open_by_key("1GOPuTeocq6G0gj4AUMdPUiE84TicJhj0Qcwvn2Sjoe4")
         sheet = spreadsheet.worksheet("工作表1")
-        data = sheet.get_all_records(head=2)
-        print(f"DEBUG: 成功讀取 {len(data)} 筆資料")
+        
+        # 使用索引對應，徹底避開標題列重複或空值問題
+        all_values = sheet.get_all_values()
+        data = []
+        for row in all_values[2:]: # 從第3列開始處理
+            if len(row) >= 6:
+                data.append({
+                    "台號": str(row[0]).strip(),
+                    "台名": str(row[1]).strip(),
+                    "模組型號": str(row[3]).strip(),
+                    "(模組位置 / 光接點)": str(row[5]).strip()
+                })
         return data
     except Exception as e:
         print(f"DEBUG: Sheets 連線異常: {e}")
@@ -80,9 +89,9 @@ def handle_message(event):
     session = USER_SESSIONS.get(uid, {"step": "input_id", "equipments": {}})
     if session["step"] == "input_id":
         data = get_site_data()
-        results = [r for r in data if msg.strip() == str(r.get("台號", "")).strip()]
+        results = [r for r in data if msg.strip() == r.get("台號", "")]
         if not results:
-            line_bot_api.reply_message(event.reply_token, TextSendMessage(text=f"查無此站 '{msg}'，請確認 Google Sheet 是否已共用給服務帳號。"))
+            line_bot_api.reply_message(event.reply_token, TextSendMessage(text=f"查無此站 '{msg}'。"))
         else:
             process_selection(uid, event.reply_token, results[0])
     elif session["step"] == "input_equip":
@@ -105,7 +114,7 @@ def get_report(site_name, equipments, ac_phase):
 
 def process_selection(uid, token, r):
     site_name = f"{r.get('台名', '未知')}-{r.get('(模組位置 / 光接點)', '未知')}"
-    equipments = {m: 1 for m in EQUIPMENT_DATABASE if m in str(r.get("模組型號", "")).upper()}
+    equipments = {m: 1 for m in EQUIPMENT_DATABASE if m in r.get("模組型號", "").upper()}
     USER_SESSIONS[uid] = {"step": "input_equip", "site_name": site_name, "equipments": equipments}
     line_bot_api.reply_message(token, TextSendMessage(text=f"已載入 {site_name}。\n輸入「計算」顯示報告，或「型號 數量」追加。"))
 
