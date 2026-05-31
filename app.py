@@ -64,22 +64,53 @@ def handle_message(event):
 
     session = USER_SESSIONS.get(uid, {"step": "input_id", "equipments": {}})
 
-    if session["step"] == "input_id":
+if session["step"] == "input_id":
         parts = msg.split()
         sid_q = parts[0]
-        loc_q = parts[1] if len(parts) > 1 else ""
+        # 💡 將剩下的部分合併，確保即使輸入多個關鍵字也能匹配
+        loc_q = " ".join(parts[1:]).upper() if len(parts) > 1 else ""
+        
         results = []
         try:
             with open(CSV_FILE_PATH, encoding='utf-8-sig') as f:
                 for r in csv.DictReader(f):
+                    # 1. 先篩選站號
                     if sid_q in str(r.get("台號", "")):
                         loc_full = r.get("(模組位置 / 光接點)", "未知位置")
-                        loc_name = loc_full.split('/')[-1].strip()
-                        if not loc_q or loc_q in loc_name.upper():
+                        loc_name = loc_full.split('/')[-1].strip().upper()
+                        
+                        # 2. 如果使用者有輸入「泰隆」，就只保留包含泰隆的項目
+                        if not loc_q or loc_q in loc_name:
                             results.append({
                                 "name": f"{r.get('台名', '未知')}-{loc_name}",
                                 "equip": r.get("模組型號", "").split('_')[0]
                             })
+        except: pass
+        
+        # 移除重複，確保結果乾淨
+        unique = {r['name']: r for r in results}.values()
+        results = list(unique)
+
+        if not results:
+            line_bot_api.reply_message(event.reply_token, TextSendMessage(text="查無此站或位置，請確認站號或關鍵字。"))
+        elif len(results) > 1:
+            session["step"] = "select_site"
+            session["options"] = results
+            line_bot_api.reply_message(event.reply_token, TextSendMessage(text="找到以下位置，請輸入編號：\n" + "\n".join([f"{i+1}. {r['name']}" for i, r in enumerate(results[:9])])))
+            USER_SESSIONS[uid] = session
+        else:
+            # 直接載入該位置的所有設備加總
+            selected_name = results[0]['name']
+            equipments = {}
+            # 重新掃描 CSV 把該位置所有設備加總
+            with open(CSV_FILE_PATH, encoding='utf-8-sig') as f:
+                for r in csv.DictReader(f):
+                    loc_name = r.get("(模組位置 / 光接點)", "").split('/')[-1].strip().upper()
+                    if f"{r.get('台名', '未知')}-{loc_name}" == selected_name:
+                        m = r.get("模組型號", "").split('_')[0]
+                        equipments[m] = equipments.get(m, 0) + 1
+            
+            line_bot_api.reply_message(event.reply_token, TextSendMessage(text=get_report(selected_name, equipments, "1P3W")))
         except Exception as e:
             line_bot_api.reply_message(event.reply_token, TextSendMessage(text=f"錯誤: {str(e)}"))
             return
