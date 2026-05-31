@@ -1,4 +1,4 @@
-﻿台號,台名,模組類型,模組ID,模組型號,硬體版本,(模組位置 / 光接點),RF_Port使用狀態,細胞(頻寬) / 細胞名稱,模組序號,Ant. Port電子角,天線型號,天線序號,軟體版本,營運中心,基維股,縣市,鄉鎮市區,administrativeState,availabilityStatus,blocking,operationalState,台號L
+台號,台名,模組類型,模組ID,模組型號,硬體版本,(模組位置 / 光接點),RF_Port使用狀態,細胞(頻寬) / 細胞名稱,模組序號,Ant. Port電子角,天線型號,天線序號,軟體版本,營運中心,基維股,縣市,鄉鎮市區,administrativeState,availabilityStatus,blocking,operationalState,台號L
 701873,東港安泰醫院,RMOD,RMOD-1/RMOD_R-1,FWEA_FREA,FWEA_FREA,,,13 / 東港安泰醫院,EB182080276,,,,FLF24R1_2317_10_2221_10,屏東營運中心,屏南基維股,屏東縣,東港鎮,,,,,701873L
 701873,東港安泰醫院,SMOD,SMOD-1/SMOD_R-1,FWEA,472898A,LAR871,,,EB182080276,,,,FLF24R1_2317_10_2221_10,屏東營運中心,屏南基維股,屏東縣,東港鎮,,,,,701873L
 702052,竹田永豐村辦,RMOD,RMOD-1/RMOD_R-1,FR2EB,FR2EB,,,13 / 竹田永豐村辦,EB181910064,,,,FLF24R1_2317_10_2221_10,屏東營運中心,屏北基維股,屏東縣,竹田鄉,,,,,702052L
