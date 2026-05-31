@@ -98,4 +98,4 @@ def get_report(site_name, equipments, ac_phase):
     bbu_p = 400
     total_rf = sum(EQUIPMENT_DATABASE[m]["power"] * q for m, q in equipments.items() if m in EQUIPMENT_DATABASE)
     net_dc = bbu_p + total_rf
-    nfb = max(30, min(100, (math.ceil(((net_dc / 0.92) / (220 * 0.9) *
+    nfb = max(30, min(100, (math.ceil(((net_dc / 0.92) / (220 * 0.9) * 1.25)/10)*10)))
