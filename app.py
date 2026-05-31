@@ -59,59 +59,62 @@ SMR_DATABASE = {
 USER_SESSIONS = {}
 
 def search_csv_database_advanced(keyword):
-    """進階檢索：針對您提供的屏東基地台表格結構進行最佳化"""
     if not os.path.exists(CSV_FILE_PATH):
         return 'NOT_FOUND', None
         
     keyword_up = keyword.upper().strip()
     matched_rows = []
     
-    # 💡 重點：使用 utf-8-sig 以處理 Excel 匯出 CSV 時常見的 BOM 檔頭問題
     with open(CSV_FILE_PATH, mode='r', encoding='utf-8-sig') as f:
         reader = csv.DictReader(f)
         for row in reader:
-            # 確保讀取的 key 和您圖片中的標頭完全一致
             sid = str(row.get("台號", "")).strip().upper()
             sname = str(row.get("台名", "")).strip()
+            # 💡 關鍵變更：將「模組位置」也納入識別，這樣就能區分出「屏東正安」、「屏東大興」
+            location = str(row.get("(模組位置 / 光接點)", "")).strip()
             
-            # 比對邏輯
+            # 建立一個邏輯 ID：台號 + 位置 (例如: 728711_屏東正安)
+            logical_id = f"{sid}_{location}"
+            
             if sid == keyword_up or keyword_up in sname:
                 raw_model = str(row.get("模組型號", "")).strip().upper()
-                # 處理 FWEA_FREA 這類雙型號命名，只取第一個
                 clean_model = raw_model.split('_')[0] if '_' in raw_model else raw_model
                 
-                # 檢查頻寬/細胞欄位是否有 3P4W 關鍵字
-                cell_info = str(row.get("細胞(頻寬) / 細胞名稱", "")).upper()
-                phase_type = "3P4W" if "3P" in cell_info else "1P3W"
-                
                 matched_rows.append({
+                    "logical_id": logical_id,
                     "site_id": sid,
                     "site_name": sname,
-                    "model": clean_model,
-                    "ac_phase": phase_type
+                    "location": location,
+                    "model": clean_model
                 })
                 
     if not matched_rows:
         return 'NOT_FOUND', None
+        
+    # 按 logical_id 分組
+    from collections import defaultdict
+    sites = defaultdict(lambda: {"equipments": {}, "name": "", "id": ""})
     
-    # 後續邏輯保持不變...
-    unique_site_ids = list(set([item["site_id"] for item in matched_rows]))
-    # ... (其餘與之前版本相同)
-    unique_site_ids = list(set([item["site_id"] for item in matched_rows]))
-    if len(unique_site_ids) == 1:
-        target_id = unique_site_ids[0]
-        site_allels = [item for item in matched_rows if item["site_id"] == target_id]
-        merged_equipments = {}
-        final_name = site_allels[0]["site_name"]
-        final_phase = "1P3W"
-        for item in site_allels:
-            model = item["model"]
-            if item["ac_phase"] == "3P4W": final_phase = "3P4W"
-            if model in EQUIPMENT_DATABASE:
-                merged_equipments[model] = merged_equipments.get(model, 0) + 1
-        return 'MATCH', {"site_id": target_id, "site_name": final_name, "ac_phase": final_phase, "equipments": merged_equipments}
-    return 'MULTI', list({item["site_id"]: item for item in matched_rows}.values())
-
+    for item in matched_rows:
+        lid = item["logical_id"]
+        sites[lid]["name"] = f"{item['site_name']} - {item['location']}"
+        sites[lid]["id"] = item["site_id"]
+        model = item["model"]
+        if model in EQUIPMENT_DATABASE:
+            sites[lid]["equipments"][model] = sites[lid]["equipments"].get(model, 0) + 1
+            
+    # 如果搜尋結果只有一個 logical_id，直接回傳詳細資料
+    if len(sites) == 1:
+        lid = list(sites.keys())[0]
+        return 'MATCH', {
+            "site_id": sites[lid]["id"],
+            "site_name": sites[lid]["name"],
+            "ac_phase": "1P3W", # 預設
+            "equipments": sites[lid]["equipments"]
+        }
+        
+    # 如果有多個，回傳列表讓同仁選擇
+    return 'MULTI', [{"site_id": s["id"], "site_name": s["name"]} for s in sites.values()]
 def calculate_current_report(site_id, site_name, ac_phase, equipments):
     bbu_p = 400
     total_rf_power = sum(EQUIPMENT_DATABASE[m]["power"] * q for m, q in equipments.items())
