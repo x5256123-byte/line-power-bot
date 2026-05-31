@@ -79,12 +79,20 @@ def handle_message(event):
     if session["step"] == "input_id":
         data = get_site_data()
         msg_clean = msg.strip()
+        
+        # 暴力診斷：查看資料庫內到底有哪些台號
+        all_db_ids = [str(r.get("台號", "")).strip() for r in data]
+        print(f"DEBUG: 資料庫中的台號清單: {all_db_ids}") 
+        
         results = [r for r in data if msg_clean == str(r.get("台號", "")).strip()]
         
         if not results:
-            line_bot_api.reply_message(event.reply_token, TextSendMessage(text="查無此站，請檢查 Google Sheet。"))
+            preview = ", ".join(all_db_ids[:3])
+            error_msg = f"查無此站 '{msg_clean}'。\n\n資料庫共有 {len(all_db_ids)} 筆資料。\n前 3 筆台號為：\n{preview}\n\n請檢查 Google Sheet 第一列是否為『台號』。"
+            line_bot_api.reply_message(event.reply_token, TextSendMessage(text=error_msg))
         else:
             process_selection(uid, event.reply_token, results[0])
+            
     elif session["step"] == "input_equip":
         if msg == "計算":
             report = get_report(session["site_name"], session["equipments"], "1P3W")
