@@ -52,6 +52,14 @@ EQUIPMENT_DATABASE = {
     "FWHN": {"name": "FWHN", "power": 95}        
 }
 
+# SMR 直流設備對照
+SMR_DATABASE = {
+    "1": {"name": "TYPE 1 (2.0 kW)", "capacity": 2000},
+    "2": {"name": "SMR (5.0 kW)", "capacity": 5000},
+    "3": {"name": "TYPE 3 (6.0 kW)", "capacity": 6000},
+    "4": {"name": "SMR (7.5 kW)", "capacity": 7500}
+}
+
 USER_SESSIONS = {}
 
 def search_csv_database(keyword):
@@ -109,14 +117,14 @@ def calculate_current_report(site_id, site_name, ac_phase, equipments):
     if calculated_nfb <= 30:
         suggested_nfb, suggested_wire = 30, "8.0 mm²"
     elif calculated_nfb <= 50:
-        suggested_nfb, suggested_wire = 50, "14 mm²"
+        suggested_nfb, Archetype_wire = 50, "14 mm²"
     elif calculated_nfb <= 60:
         suggested_nfb, suggested_wire = 60, "22 mm²"
     elif calculated_nfb <= 85:
         suggested_nfb = 75 if calculated_nfb <= 75 else 100
         suggested_wire = "38 mm²"
     else:
-        suggested_nfb, Archetype_wire = calculated_nfb, "50 mm² 或以上"
+        suggested_nfb, suggested_wire = calculated_nfb, "50 mm² 或以上"
 
     ac_kwh_per_hour = ac_total_w / 1000.0
     ac_kwh_per_month = ac_kwh_per_hour * 24 * 30
@@ -139,9 +147,9 @@ def calculate_current_report(site_id, site_name, ac_phase, equipments):
         f" 📊 3. 既有常態耗電度數預估\n"
         f"   👉 每月份總用電: 【 {ac_kwh_per_month:.1f} 度電 / 月 】\n"
         f" -----------------------------------\n\n"
-        f"🛠️ 【擴頻加掛防呆引導】\n"
+        f"🛠| 【擴頻加掛防呆引導】\n"
         f"若此站需要「追加新射頻」，請直接輸入【型號 數量】（如：fwhn 3）進行累加。\n"
-        f"若不需擴頻，輸入「開始評估」即可切換下一站。"
+        f"💡 輸入 【0】 可直接返回重新輸入站號。"
     )
     return report
 
@@ -169,6 +177,7 @@ def handle_message(event):
 
     session = USER_SESSIONS[user_id]
 
+    # 萬用重頭開始指令
     if user_msg in ["開始評估", "HELP", "⚡ 新設基地台電力評估"]:
         USER_SESSIONS[user_id] = {
             "step": "input_site_id", "site_id": "未知站號", "site_name": "未命名站台", 
@@ -217,28 +226,26 @@ def handle_message(event):
                 reply_text += f"• 站號: {row.get('site_id')} | 站名: {row.get('site_name')}\n"
             
         else:
-            # 🔴 關鍵變更：搜尋不到！不強行推進，而是進入詢問狀態
             session["step"] = "ask_not_found_options"
-            session["failed_keyword"] = raw_msg  # 暫存同仁打錯或想當作新站名的字串
+            session["failed_keyword"] = raw_msg 
             reply_text = (
                 f"🔎 關鍵字【 {raw_msg} 】於資料庫中查無紀錄！\n"
                 f"-----------------------------------\n"
                 f"請回覆代號數字【1 或 2】決定後續操作：\n\n"
                 f"【1】 🔄 重新搜尋（我可能打錯字了）\n"
-                f"【2】 🟢 新增站台（這是一座全新的站）"
+                f"【2】 🟢 新增站台（這是一座全新的站）\n"
+                f"💡 輸入 【0】 亦可直接退回重新搜尋。"
             )
             
         line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply_text))
         return
 
-    # 🛑 新增防呆關卡：處理查無站台時的二選一抉擇
+    # 🛑 關卡：處理查無站台時的二選一抉擇 (支援 0 返回)
     elif session["step"] == "ask_not_found_options":
-        if user_msg == "1":
-            # 同仁選 1：回歸最原點重新搜尋
+        if user_msg == "0" or user_msg == "1":
             session["step"] = "input_site_id"
-            reply_text = "🔄 請重新輸入正確的【站號 或 站台名稱關鍵字】："
+            reply_text = "🔄 已返回。請重新輸入正確的【站號 或 站台名稱關鍵字】："
         elif user_msg == "2":
-            # 同仁選 2：確認要新設，自動把剛才輸入的字當作新站台名稱
             session["step"] = "input_equip"
             session["site_id"] = "NEW_SITE"
             session["site_name"] = session["failed_keyword"]
@@ -246,16 +253,25 @@ def handle_message(event):
                 f"⚙️ 系統已成功建立 ➡️ 【 🟢 新站建設模式 】\n"
                 f"✅ 新設站台名稱定為：【 {session['site_name']} 】\n\n"
                 f"【步驟 2：請輸入新設射頻設備】\n"
-                f"請直接輸入型號與數量（大小寫皆可，如：fwhn 3），確認好設備後輸入【計算】。"
+                f"請直接輸入型號與數量（大小寫皆可，如：fwhn 3），確認好設備後輸入【計算】。\n"
+                f"💡 輸入 【0】 可退回重新輸入站號。"
             )
         else:
-            reply_text = "⚠️ 輸入無效！請直接回覆數字 【1】 重新搜尋，或回覆 【2】 新增全新站台。"
+            reply_text = "⚠️ 輸入無效！請回覆 【1】 重新搜尋，【2】 新增全新站台，或回覆 【0】 退回起點。"
             
         line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply_text))
         return
 
-    # 階段一：處理新設/累加設備輸入
+    # 階段一：處理新設/累加設備輸入 (支援 0 返回)
     elif session["step"] == "input_equip":
+        if user_msg == "0":
+            # 🟢 返回：退回最一開始輸入站號的狀態
+            session["step"] = "input_site_id"
+            session["equipments"] = {}
+            reply_text = "🔄 已返回初始狀態。請重新輸入【站號 或 站台名稱關鍵字】："
+            line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply_text))
+            return
+
         if user_msg == "計算":
             if not session["equipments"]:
                 line_bot_api.reply_message(event.reply_token, TextSendMessage(text="❌ 目前清單是空的，請先輸入設備。"))
@@ -267,7 +283,8 @@ def handle_message(event):
                 f"【步驟 3：請選擇現場交流供電相別】\n"
                 f"請直接回覆代號數字【1 或 2】:\n"
                 f"【1】 🔴 單相三線 (1P3W 220V)\n"
-                f"【2】 🔵 三相四線 (3P4W 380V) - 實務抓 RST 任一相配 N 相接法"
+                f"【2】 🔵 三相四線 (3P4W 380V) - 實務抓 RST 任一相配 N 相接法\n\n"
+                f"💡 輸入 【0】 可退回上一步調整設備。"
             )
             line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply_text))
             return
@@ -289,16 +306,23 @@ def handle_message(event):
                         reply = f"✅ 已成功累加變更：{EQUIPMENT_DATABASE[model]['name']} 追加 {qty} 台。\n調整後完整清單：\n"
                         for k, v in session["equipments"].items():
                             reply += f"• {EQUIPMENT_DATABASE[k]['name']}: {v}台\n"
-                        reply += "\n輸入【計算】重新配置 SMR 系統及開關。"
+                        reply += "\n輸入【計算】選擇供電相別，或輸入【0】重新來過。"
                     
                     line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply))
                     return
         except ValueError:
             pass
-        line_bot_api.reply_message(event.reply_token, TextSendMessage(text="⚠️ 請輸入「型號 數量」(如：arda 3)，或輸入「計算」。"))
+        line_bot_api.reply_message(event.reply_token, TextSendMessage(text="⚠️ 請輸入「型號 數量」(如：arda 3)，或輸入「計算」。\n輸入「0」可退回起點。"))
 
-    # 階段二：選擇 AC 供電相別 (擴頻累加時使用)
+    # 階段二：選擇 AC 供電相別 (支援 0 返回)
     elif session["step"] == "select_ac_phase":
+        if user_msg == "0":
+            # 🟢 返回：退回設備輸入階段
+            session["step"] = "input_equip"
+            reply_text = "🔄 已退回設備編輯階段。請繼續追加射頻設備，或輸入【計算】推進："
+            line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply_text))
+            return
+
         if user_msg in ["1", "2"]:
             session["ac_phase"] = "1P3W" if user_msg == "1" else "3P4W"
             
@@ -343,15 +367,28 @@ def handle_message(event):
                 f"【1】 TYPE 1 (2.0 kW)\n"
                 f"【2】 SMR (5.0 kW)\n"
                 f"【3】 TYPE 3 (6.0 kW)\n"
-                f"【4】 SMR (7.5 kW)"
+                f"【4】 SMR (7.5 kW)\n\n"
+                f"💡 輸入 【0】 可退回上一步重選交流相別。"
             )
             line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply_text))
             return
         else:
-            line_bot_api.reply_message(event.reply_token, TextSendMessage(text="⚠️ 請回覆 1 選擇單相三線，或回覆 2 選擇三相四線。"))
+            line_bot_api.reply_message(event.reply_token, TextSendMessage(text="⚠️ 請回覆 1 選擇單相三線，或回覆 2 選擇三相四線。\n輸入「0」可退回上一步。"))
 
-    # 階段三：手選直流設備 (多機累加與最終防呆報告)
+    # 階段三：手選直流設備 (支援 0 返回)
     elif session["step"] == "select_smr":
+        if user_msg == "0":
+            # 🟢 返回：退回供電相別選擇階段
+            session["step"] = "select_ac_phase"
+            reply_text = (
+                f"🔄 已退回供電相別階段。\n"
+                f"請重新回覆供電相別代號數字【1 或 2】:\n"
+                f"【1】 🔴 單相三線 (1P3W 220V)\n"
+                f"【2】 🔵 三相四線 (3P4W 380V)"
+            )
+            line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply_text))
+            return
+
         if user_msg in SMR_DATABASE:
             chosen_smr_spec = SMR_DATABASE[user_msg]
             session["chosen_smrs"].append(chosen_smr_spec)
@@ -368,7 +405,8 @@ def handle_message(event):
                     f" 🔋 目前累計總供電容量: {current_total_capacity:.0f} W\n"
                     f" ⚠️ 缺額尚差: 🔴 【 {remaining_w:.0f} W 】\n"
                     f" -----------------------------------\n\n"
-                    f"【請選擇再補一台直流設備（回覆 1 ~ 4）】"
+                    f"【請選擇再補一台直流設備（回覆 1 ~ 4）】\n"
+                    f"💡 輸入 【0】 可退回重選供電相別。"
                 )
                 line_bot_api.reply_message(event.reply_token, TextSendMessage(text=loop_reply))
                 return
@@ -429,7 +467,7 @@ def handle_message(event):
             line_bot_api.reply_message(event.reply_token, TextSendMessage(text=report))
             return
         else:
-            line_bot_api.reply_message(event.reply_token, TextSendMessage(text="⚠️ 請輸入正確的直流設備代號數字 (1、2、3 或 4)。"))
+            line_bot_api.reply_message(event.reply_token, TextSendMessage(text="⚠️ 請輸入正確的直流設備代號數字 (1、2、3 或 4)。\n輸入「0」可退回上一步。"))
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000)
