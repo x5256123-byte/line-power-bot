@@ -38,30 +38,16 @@ USER_SESSIONS = {}
 def get_site_data():
     try:
         creds_json = os.environ.get("GOOGLE_CREDS_JSON")
-        if not creds_json: return []
-        creds_dict = json.loads(creds_json)
-        scope = [
-            "https://spreadsheets.google.com/feeds",
-            'https://www.googleapis.com/auth/spreadsheets',
-            "https://www.googleapis.com/auth/drive.file",
-            "https://www.googleapis.com/auth/drive"
-        ]
-        creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
+        creds = ServiceAccountCredentials.from_json_keyfile_dict(json.loads(creds_json), ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"])
         client = gspread.authorize(creds)
-        spreadsheet = client.open_by_key("1GOPuTeocq6G0gj4AUMdPUiE84TicJhj0Qcwvn2Sjoe4")
-        sheet = spreadsheet.worksheet("工作表1")
+        sheet = client.open_by_key("1GOPuTeocq6G0gj4AUMdPUiE84TicJhj0Qcwvn2Sjoe4").worksheet("工作表1")
         
-        # 使用索引對應，徹底避開標題列重複或空值問題
+        # 避開標題列問題的絕對位置讀取法
         all_values = sheet.get_all_values()
         data = []
-        for row in all_values[2:]: # 從第3列開始處理
-            if len(row) >= 6:
-                data.append({
-                    "台號": str(row[0]).strip(),
-                    "台名": str(row[1]).strip(),
-                    "模組型號": str(row[3]).strip(),
-                    "(模組位置 / 光接點)": str(row[5]).strip()
-                })
+        for r in all_values[2:]: # 從第3列開始
+            if len(r) >= 6:
+                data.append({"台號": str(r[0]).strip(), "台名": str(r[1]).strip(), "模組型號": str(r[3]).strip(), "(模組位置 / 光接點)": str(r[5]).strip()})
         return data
     except Exception as e:
         print(f"DEBUG: Sheets 連線異常: {e}")
@@ -70,17 +56,12 @@ def get_site_data():
 @app.route("/callback", methods=['POST'])
 def callback():
     signature = request.headers.get('X-Line-Signature')
-    body = request.get_data(as_text=True)
-    try:
-        handler.handle(body, signature)
-    except InvalidSignatureError:
-        abort(400)
+    handler.handle(request.get_data(as_text=True), signature)
     return 'OK'
 
 @handler.add(MessageEvent, message=TextMessage)
 def handle_message(event):
-    uid = event.source.user_id
-    msg = event.message.text.strip().upper()
+    uid, msg = event.source.user_id, event.message.text.strip().upper()
     if msg in ["開始評估", "HELP", "0"]:
         USER_SESSIONS[uid] = {"step": "input_id", "equipments": {}}
         line_bot_api.reply_message(event.reply_token, TextSendMessage(text="請輸入站號："))
@@ -89,23 +70,25 @@ def handle_message(event):
     session = USER_SESSIONS.get(uid, {"step": "input_id", "equipments": {}})
     if session["step"] == "input_id":
         data = get_site_data()
-        results = [r for r in data if msg.strip() == r.get("台號", "")]
+        debug_list = [str(r.get("台號", "NULL")) for r in data[:3]]
+        results = [r for r in data if msg.strip() == str(r.get("台號", "")).strip()]
+        
         if not results:
-            line_bot_api.reply_message(event.reply_token, TextSendMessage(text=f"查無此站 '{msg}'。"))
+            line_bot_api.reply_message(event.reply_token, TextSendMessage(text=f"查無此站 '{msg}'。\n\n[除錯資訊]\n前3筆台號為：{debug_list}\n請檢查輸入格式。"))
         else:
             process_selection(uid, event.reply_token, results[0])
     elif session["step"] == "input_equip":
         if msg == "計算":
-            line_bot_api.reply_message(event.reply_token, TextSendMessage(get_report(session["site_name"], session["equipments"], "1P3W")))
+            line_bot_api.reply_message(event.reply_token, TextSendMessage(get_report(session["site_name"], session["equipments"])))
         elif len(msg.split()) == 2 and msg.split()[0] in EQUIPMENT_DATABASE:
             m, q = msg.split()[0], int(msg.split()[1])
             session["equipments"][m] = session["equipments"].get(m, 0) + q
             USER_SESSIONS[uid] = session
             line_bot_api.reply_message(event.reply_token, TextSendMessage(text=f"已追加 {m}，共 {session['equipments'][m]} 台。"))
 
-def get_report(site_name, equipments, ac_phase):
+def get_report(site_name, equipments):
     bbu_p = 400
-    total_rf = sum(EQUIPMENT_DATABASE[m]["power"] * q for m, q in equipments.items() if m in EQUIPMENT_DATABASE)
+    total_rf = sum(EQUIPMENT_DATABASE[m]["power"] * q for m, q in equipments.items())
     net_dc = bbu_p + total_rf
     nfb = max(30, min(100, (math.ceil(((net_dc / 0.92) / (220 * 0.9) * 1.25)/10)*10)))
     wire = "8.0 mm²" if nfb <= 30 else ("14 mm²" if nfb <= 50 else "22 mm²")
@@ -116,8 +99,7 @@ def process_selection(uid, token, r):
     site_name = f"{r.get('台名', '未知')}-{r.get('(模組位置 / 光接點)', '未知')}"
     equipments = {m: 1 for m in EQUIPMENT_DATABASE if m in r.get("模組型號", "").upper()}
     USER_SESSIONS[uid] = {"step": "input_equip", "site_name": site_name, "equipments": equipments}
-    line_bot_api.reply_message(token, TextSendMessage(text=f"已載入 {site_name}。\n輸入「計算」顯示報告，或「型號 數量」追加。"))
+    line_bot_api.reply_message(token, TextSendMessage(text=f"已載入 {site_name}。\n輸入「計算」顯示報告。"))
 
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 8080))
-    app.run(host="0.0.0.0", port=port)
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 8080)))
