@@ -59,24 +59,44 @@ SMR_DATABASE = {
 USER_SESSIONS = {}
 
 def search_csv_database_advanced(keyword):
+    """進階檢索：針對您提供的屏東基地台表格結構進行最佳化"""
     if not os.path.exists(CSV_FILE_PATH):
         return 'NOT_FOUND', None
+        
     keyword_up = keyword.upper().strip()
     matched_rows = []
-    with open(CSV_FILE_PATH, mode='r', encoding='utf-8') as f:
+    
+    # 💡 重點：使用 utf-8-sig 以處理 Excel 匯出 CSV 時常見的 BOM 檔頭問題
+    with open(CSV_FILE_PATH, mode='r', encoding='utf-8-sig') as f:
         reader = csv.DictReader(f)
         for row in reader:
+            # 確保讀取的 key 和您圖片中的標頭完全一致
             sid = str(row.get("台號", "")).strip().upper()
             sname = str(row.get("台名", "")).strip()
-            sname_up = sname.upper()
-            if sid == keyword_up or keyword_up in sname_up:
+            
+            # 比對邏輯
+            if sid == keyword_up or keyword_up in sname:
                 raw_model = str(row.get("模組型號", "")).strip().upper()
+                # 處理 FWEA_FREA 這類雙型號命名，只取第一個
                 clean_model = raw_model.split('_')[0] if '_' in raw_model else raw_model
+                
+                # 檢查頻寬/細胞欄位是否有 3P4W 關鍵字
                 cell_info = str(row.get("細胞(頻寬) / 細胞名稱", "")).upper()
                 phase_type = "3P4W" if "3P" in cell_info else "1P3W"
-                matched_rows.append({"site_id": sid, "site_name": sname, "model": clean_model, "ac_phase": phase_type})
+                
+                matched_rows.append({
+                    "site_id": sid,
+                    "site_name": sname,
+                    "model": clean_model,
+                    "ac_phase": phase_type
+                })
+                
     if not matched_rows:
         return 'NOT_FOUND', None
+    
+    # 後續邏輯保持不變...
+    unique_site_ids = list(set([item["site_id"] for item in matched_rows]))
+    # ... (其餘與之前版本相同)
     unique_site_ids = list(set([item["site_id"] for item in matched_rows]))
     if len(unique_site_ids) == 1:
         target_id = unique_site_ids[0]
