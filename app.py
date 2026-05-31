@@ -44,28 +44,18 @@ def get_site_data():
         creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
         client = gspread.authorize(creds)
         
-        # 使用 open 改用 key，並直接抓取第一個工作表
-        sheet = client.open_by_key("14BwO3k0sP7v9S_s53Y58W50c-e2f9fH4p6g1aJ4T0hM").get_worksheet(0)
+        # 開啟試算表與分頁
+        spreadsheet = client.open_by_key("14BwO3k0sP7v9S_s53Y58W50c-e2f9fH4p6g1aJ4T0hM")
+        sheet = spreadsheet.worksheet("工作表1")
         
-        data = sheet.get_all_records()
+        # 關鍵修正：head=2 告訴程式標題在第 2 列
+        data = sheet.get_all_records(head=2)
+        
+        print(f"DEBUG: 成功讀取 {len(data)} 筆資料，標題列已設為第 2 列")
         return data
     except Exception as e:
         print(f"DEBUG: Sheets 連線異常: {e}")
         return []
-@app.route("/", methods=['GET'])
-def home():
-    return "Bot is running", 200
-
-@app.route("/callback", methods=['POST'])
-def callback():
-    signature = request.headers.get('X-Line-Signature')
-    body = request.get_data(as_text=True)
-    try:
-        handler.handle(body, signature)
-    except InvalidSignatureError:
-        abort(400)
-    return 'OK'
-
 @handler.add(MessageEvent, message=TextMessage)
 def handle_message(event):
     if not line_bot_api: return
