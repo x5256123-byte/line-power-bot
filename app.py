@@ -62,7 +62,7 @@ def callback():
     except InvalidSignatureError:
         abort(400)
     return 'OK'
-
+ 
 @handler.add(MessageEvent, message=TextMessage)
 def handle_message(event):
     if not line_bot_api: return
@@ -76,14 +76,20 @@ def handle_message(event):
     
     session = USER_SESSIONS.get(uid, {"step": "input_id", "equipments": {}})
     
-    if session["step"] == "input_id":
+if session["step"] == "input_id":
         data = get_site_data()
+        
+        # --- 除錯核心 ---
+        all_ids = []
+        for r in data:
+            val = r.get("台號", "")
+            all_ids.append(str(val))
+        print(f"DEBUG: 程式讀取到的所有台號: {all_ids}")
+        # ----------------
+        
         results = [r for r in data if msg in str(r.get("台號", ""))]
-        if not results:
-            line_bot_api.reply_message(event.reply_token, TextSendMessage(text="查無此站，請檢查 Google Sheet。"))
-        else:
-            process_selection(uid, event.reply_token, results[0])
-            
+        # ... 後續邏輯
+
     elif session["step"] == "input_equip":
         if msg == "計算":
             report = get_report(session["site_name"], session["equipments"], "1P3W")
