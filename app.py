@@ -116,7 +116,7 @@ def calculate_current_report(site_id, site_name, ac_phase, equipments):
         suggested_nfb = 75 if calculated_nfb <= 75 else 100
         suggested_wire = "38 mm²"
     else:
-        suggested_nfb, suggested_wire = calculated_nfb, "50 mm² 或以上"
+        suggested_nfb, Archetype_wire = calculated_nfb, "50 mm² 或以上"
 
     ac_kwh_per_hour = ac_total_w / 1000.0
     ac_kwh_per_month = ac_kwh_per_hour * 24 * 30
@@ -131,16 +131,16 @@ def calculate_current_report(site_id, site_name, ac_phase, equipments):
         f" -----------------------------------\n"
         f" 🔋 1. 直流端基本耗電需求的總和\n"
         f"   • 主設備直流負載總和 (含BBU): {net_dc_load:.0f} W\n"
-        f" ⚡ 2. 交流交流供電運轉統計\n"
+        f" ⚡ 2. 交流供電運轉統計\n"
         f"   • SMR 常態交流側總功耗: {ac_total_w:.0f} W\n"
         f"   • 現場運轉線電流: {ac_current:.2f} A\n"
-        f"   👉 既有建議 NFB 開關: {suggested_nfb} A 2P\n"
-        f"   👉 既有建議拉線線徑: {suggested_wire}\n"
+        f"   👉 建議開關：{suggested_nfb} A 2P\n"
+        f"   👉 建議拉線線徑: {suggested_wire}\n"
         f" 📊 3. 既有常態耗電度數預估\n"
         f"   👉 每月份總用電: 【 {ac_kwh_per_month:.1f} 度電 / 月 】\n"
         f" -----------------------------------\n\n"
         f"🛠️ 【擴頻加掛防呆引導】\n"
-        f"若此行需要「追加新射頻」，請直接輸入【型號 數量】（大小寫皆可，如：fwhn 3）進行累加變更。\n"
+        f"若此站需要「追加新射頻」，請直接輸入【型號 數量】（如：fwhn 3）進行累加。\n"
         f"若不需擴頻，輸入「開始評估」即可切換下一站。"
     )
     return report
@@ -164,7 +164,7 @@ def handle_message(event):
     if user_id not in USER_SESSIONS:
         USER_SESSIONS[user_id] = {
             "step": "input_site_id", "site_id": "未知站號", "site_name": "未命名站台", 
-            "equipments": {}, "ac_phase": "1P3W", "chosen_smrs": []
+            "equipments": {}, "ac_phase": "1P3W", "chosen_smrs": [], "failed_keyword": ""
         }
 
     session = USER_SESSIONS[user_id]
@@ -172,7 +172,7 @@ def handle_message(event):
     if user_msg in ["開始評估", "HELP", "⚡ 新設基地台電力評估"]:
         USER_SESSIONS[user_id] = {
             "step": "input_site_id", "site_id": "未知站號", "site_name": "未命名站台", 
-            "equipments": {}, "ac_phase": "1P3W", "chosen_smrs": []
+            "equipments": {}, "ac_phase": "1P3W", "chosen_smrs": [], "failed_keyword": ""
         }
         reply_text = (
             "📱 【Nokia 電力助手 - 智慧雙向搜尋版】\n\n"
@@ -184,7 +184,7 @@ def handle_message(event):
         line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply_text))
         return
 
-    # 🔍 階段零：雙向檢索 (升級：一搜到立刻噴出現況用電報告)
+    # 🔍 階段零：雙向檢索邏輯
     if session["step"] == "input_site_id":
         status, result = search_csv_database(raw_msg)
         
@@ -193,7 +193,6 @@ def handle_message(event):
             session["site_name"] = str(result.get("site_name", "既存站台"))
             session["ac_phase"] = "3P4W" if "3P4W" in str(result.get("ac_phase", "")).upper() else "1P3W"
             
-            # 解析既有射頻設備 (格式: FXDB:3,FHEB:3)
             exist_equip_str = str(result.get("exist_equip", "")).strip()
             parsed_equip = {}
             if exist_equip_str and ":" in exist_equip_str:
@@ -206,9 +205,8 @@ def handle_message(event):
                             parsed_equip[m_up] = int(q)
             
             session["equipments"] = parsed_equip
-            session["step"] = "input_equip" # 允許後續直接追加
+            session["step"] = "input_equip"
             
-            # 🟢 核心進化：查到立刻幫同仁做現況電力與度數估算報告，省去後續繁瑣點擊
             reply_text = calculate_current_report(
                 session["site_id"], session["site_name"], session["ac_phase"], session["equipments"]
             )
@@ -219,16 +217,39 @@ def handle_message(event):
                 reply_text += f"• 站號: {row.get('site_id')} | 站名: {row.get('site_name')}\n"
             
         else:
-            session["step"] = "input_site_name"
-            session["site_name"] = raw_msg 
-            session["step"] = "input_equip" 
+            # 🔴 關鍵變更：搜尋不到！不強行推進，而是進入詢問狀態
+            session["step"] = "ask_not_found_options"
+            session["failed_keyword"] = raw_msg  # 暫存同仁打錯或想當作新站名的字串
             reply_text = (
-                f"🔎 關鍵字【 {raw_msg} 】於資料庫中查無紀錄。\n"
-                f"⚙️ 系統已自動切換至 ➡️ 【 🟢 新站建設模式 】\n"
-                f"✅ 新設站台名稱暫定為：【 {raw_msg} 】\n\n"
-                f"【步驟 2：請輸入新設射頻設備】\n"
-                f"請直接輸入型號與數量（大小寫皆可，如：fxed 3），確認好設備後輸入【計算】。"
+                f"🔎 關鍵字【 {raw_msg} 】於資料庫中查無紀錄！\n"
+                f"-----------------------------------\n"
+                f"請回覆代號數字【1 或 2】決定後續操作：\n\n"
+                f"【1】 🔄 重新搜尋（我可能打錯字了）\n"
+                f"【2】 🟢 新增站台（這是一座全新的站）"
             )
+            
+        line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply_text))
+        return
+
+    # 🛑 新增防呆關卡：處理查無站台時的二選一抉擇
+    elif session["step"] == "ask_not_found_options":
+        if user_msg == "1":
+            # 同仁選 1：回歸最原點重新搜尋
+            session["step"] = "input_site_id"
+            reply_text = "🔄 請重新輸入正確的【站號 或 站台名稱關鍵字】："
+        elif user_msg == "2":
+            # 同仁選 2：確認要新設，自動把剛才輸入的字當作新站台名稱
+            session["step"] = "input_equip"
+            session["site_id"] = "NEW_SITE"
+            session["site_name"] = session["failed_keyword"]
+            reply_text = (
+                f"⚙️ 系統已成功建立 ➡️ 【 🟢 新站建設模式 】\n"
+                f"✅ 新設站台名稱定為：【 {session['site_name']} 】\n\n"
+                f"【步驟 2：請輸入新設射頻設備】\n"
+                f"請直接輸入型號與數量（大小寫皆可，如：fwhn 3），確認好設備後輸入【計算】。"
+            )
+        else:
+            reply_text = "⚠️ 輸入無效！請直接回覆數字 【1】 重新搜尋，或回覆 【2】 新增全新站台。"
             
         line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply_text))
         return
@@ -264,7 +285,6 @@ def handle_message(event):
                             del session["equipments"][model]
                         reply = f"已從清單中移除 {model}。"
                     else:
-                        # 既有設備加上新輸入的數量
                         session["equipments"][model] = session["equipments"].get(model, 0) + qty
                         reply = f"✅ 已成功累加變更：{EQUIPMENT_DATABASE[model]['name']} 追加 {qty} 台。\n調整後完整清單：\n"
                         for k, v in session["equipments"].items():
@@ -405,7 +425,7 @@ def handle_message(event):
                 f"💡 輸入「開始評估」可開啟下一座台的電力計算。"
             )
             
-            USER_SESSIONS[user_id] = {"step": "input_site_id", "site_id": "未知站號", "site_name": "未命名站台", "equipments": {}, "ac_phase": "1P3W", "chosen_smrs": []}
+            USER_SESSIONS[user_id] = {"step": "input_site_id", "site_id": "未知站號", "site_name": "未命名站台", "equipments": {}, "ac_phase": "1P3W", "chosen_smrs": [], "failed_keyword": ""}
             line_bot_api.reply_message(event.reply_token, TextSendMessage(text=report))
             return
         else:
