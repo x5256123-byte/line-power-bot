@@ -44,9 +44,7 @@ def get_site_data():
         creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
         client = gspread.authorize(creds)
         sheet = client.open("x5256123").sheet1
-        data = sheet.get_all_records()
-        print(f"DEBUG: 成功讀取 {len(data)} 筆資料")
-        return data
+        return sheet.get_all_records()
     except Exception as e:
         print(f"DEBUG: Sheets 連線異常: {e}")
         return []
@@ -78,25 +76,13 @@ def handle_message(event):
     
     session = USER_SESSIONS.get(uid, {"step": "input_id", "equipments": {}})
     
-if session["step"] == "input_id":
+    if session["step"] == "input_id":
         data = get_site_data()
-        msg_clean = str(msg).strip()
-        
-        # --- 強制類型一致化比對 ---
-        results = []
-        for r in data:
-            # 強制將資料庫的欄位轉為純文字，並去掉空格
-            db_id = str(r.get("台號", "")).strip()
-            if msg_clean == db_id:
-                results.append(r)
-        # ------------------------
+        msg_clean = msg.strip()
+        results = [r for r in data if msg_clean == str(r.get("台號", "")).strip()]
         
         if not results:
-            # 加入除錯反饋，讓你直接在 LINE 看到 Bot 到底在跟什麼做比對
-            line_bot_api.reply_message(
-                event.reply_token, 
-                TextSendMessage(text=f"查無此站 '{msg_clean}'。\n請檢查 Google Sheet 內『台號』欄位是否有該資料。")
-            )
+            line_bot_api.reply_message(event.reply_token, TextSendMessage(text="查無此站，請檢查 Google Sheet。"))
         else:
             process_selection(uid, event.reply_token, results[0])
     elif session["step"] == "input_equip":
