@@ -103,6 +103,7 @@ def process_selection(uid, token, r):
     
     USER_SESSIONS[uid] = {"step": "input_equip", "site_name": site_name, "equipments": equipments}
     line_bot_api.reply_message(token, TextSendMessage(text=f"已載入 {site_name}。\n輸入「計算」顯示報告，或「型號 數量」追加。"))
-
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=10000)
+    # Render 會自動設定 PORT 環境變數
+    port = int(os.environ.get("PORT", 8080))
+    app.run(host="0.0.0.0", port=port)
