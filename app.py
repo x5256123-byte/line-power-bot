@@ -75,15 +75,9 @@ def handle_message(event):
         return
     
     session = USER_SESSIONS.get(uid, {"step": "input_id", "equipments": {}})
-    
-    if session["step"] == "input_id":
-        data = get_site_data()
-        results = [r for r in data if msg in str(r.get("台號", ""))]
-        if not results:
-            line_bot_api.reply_message(event.reply_token, TextSendMessage(text="查無此站，請檢查 Google Sheet。"))
-        else:
-            process_selection(uid, event.reply_token, results[0])
-            
+# 將原本的搜尋邏輯改為這三行
+        msg_clean = msg.strip() # 去掉訊息前後空格
+        results = [r for r in data if msg_clean == str(r.get("台號", "")).strip()]
     elif session["step"] == "input_equip":
         if msg == "計算":
             report = get_report(session["site_name"], session["equipments"], "1P3W")
