@@ -43,6 +43,7 @@ def get_site_data():
         scope = ["https://spreadsheets.google.com/feeds", 'https://www.googleapis.com/auth/spreadsheets']
         creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
         client = gspread.authorize(creds)
+        # 這裡才是正確的擺放位置
         spreadsheet = client.open_by_key("14BwO3k0sP7v9S_s53Y58W50c-e2f9fH4p6g1aJ4T0hM")
         sheet = spreadsheet.worksheet("工作表1")
         data = sheet.get_all_records(head=2)
@@ -52,7 +53,7 @@ def get_site_data():
         print(f"DEBUG: Sheets 連線異常: {e}")
         return []
 
-# --- 路由設定 (這就是解決 404 的關鍵) ---
+# --- 路由設定 ---
 @app.route("/", methods=['GET'])
 def home():
     return "Bot is running", 200
@@ -67,6 +68,7 @@ def callback():
         abort(400)
     return 'OK'
 
+# --- 訊息處理 ---
 @handler.add(MessageEvent, message=TextMessage)
 def handle_message(event):
     if not line_bot_api: return
