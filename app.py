@@ -17,7 +17,7 @@ handler = WebhookHandler(LINE_CHANNEL_SECRET)
 # --- 本地 CSV 檔案路徑 ---
 CSV_FILE_PATH = os.path.join(os.path.dirname(__file__), "pingtung_sites.csv")
 
-# --- 🎯 射頻設備日常運轉基本功耗資料庫 ---
+# --- 🎯 射頻設備日常運轉基本功耗資料庫 (完全對齊您最終核定瓦數) ---
 EQUIPMENT_DATABASE = {
     # 宏基站 (Macro Cell) 既存規格
     "FXDB": {"name": "FXDB", "power": 780},
@@ -50,6 +50,14 @@ EQUIPMENT_DATABASE = {
     "AHEJ": {"name": "AHEJ", "power": 90},      
     "AWHQE": {"name": "AWHQE", "power": 285}, 
     "FWHN": {"name": "FWHN", "power": 95}        
+}
+
+# SMR 直流設備對照
+SMR_DATABASE = {
+    "1": {"name": "TYPE 1 (2.0 kW)", "capacity": 2000},
+    "2": {"name": "SMR (5.0 kW)", "capacity": 5000},
+    "3": {"name": "TYPE 3 (6.0 kW)", "capacity": 6000},
+    "4": {"name": "SMR (7.5 kW)", "capacity": 7500}
 }
 
 USER_SESSIONS = {}
@@ -135,16 +143,18 @@ def calculate_current_report(site_id, site_name, ac_phase, equipments):
     net_dc_load = bbu_p + total_rf_power
     smr_efficiency = 0.92
     pf = 0.90
-    ac_total_w = net_dc_load / smr_efficiency
+    ac_total_w = total_dc_demand = net_dc_load 
+    ac_total_w_calc = total_dc_demand / smr_efficiency
     
     phase_title = "單相三線 (1P3W 220V)" if ac_phase == "1P3W" else "三相四線 (3P4W -> 實務抓單相 RST+N)"
-    ac_current = ac_total_w / (220 * pf)
+    ac_current = ac_total_w_calc / (220 * pf)
     calculated_nfb = math.ceil(ac_current * 1.25)
     
     if calculated_nfb <= 30:
         suggested_nfb, suggested_wire = 30, "8.0 mm²"
     elif calculated_nfb <= 50:
-        suggested_nfb, suggested_wire = 50, "14 mm²"
+        suggested_nfb, simulated_wire = 50, "14 mm²"
+        suggested_wire = simulated_wire
     elif calculated_nfb <= 60:
         suggested_nfb, suggested_wire = 60, "22 mm²"
     elif calculated_nfb <= 85:
@@ -153,9 +163,78 @@ def calculate_current_report(site_id, site_name, ac_phase, equipments):
     else:
         suggested_nfb, suggested_wire = calculated_nfb, "50 mm² 或以上"
 
-    ac_kwh_per_hour = ac_total_w / 1000.0
+    ac_kwh_per_hour = ac_total_w_calc / 1000.0
     ac_kwh_per_month = ac_kwh_per_hour * 24 * 30
     detail_str = "\n".join(detail_list) if detail_list else "   • 無既存或相符之射頻設備"
 
+    # 🎯 變更點：修正內部的變更與呼叫，確保字串變數安全閉合
     report = (
         f"🔍 【資料庫檢索——站台歷史現況報告】\n"
+        f"🏢 台號：{site_id}\n"
+        f"🏢 台名：{site_name}\n"
+        f"⚡ 預設供電：{phase_title}\n\n"
+        f"📋 既存射頻耗電明細：\n{detail_str}\n"
+        f" -----------------------------------\n"
+        f" 🔋 1. 直流端耗電需求\n"
+        f"   • 主設備直流負載總和 (含BBU): {net_dc_load:.0f} W\n"
+        f" ⚡ 2. 交流供電運轉統計\n"
+        f"   • SMR 常態交流側總功耗: {ac_total_w_calc:.0f} W\n"
+        f"   • 現場運轉線電流: {ac_current:.2f} A\n"
+        f"   👉 建議開關：{suggested_nfb} A 2P\n"
+        f"   👉 建議拉線線徑: {suggested_wire}\n"
+        f" 📊 3. 既有每月耗電度數預估\n"
+        f"   👉 每月份總用電: 【 {ac_kwh_per_month:.1f} 度電 / 月 】\n"
+        f" -----------------------------------\n\n"
+        f"🛠️ 【擴頻加掛防呆引導】\n"
+        f"若此站要「追加新射頻」，請直接輸入【型號 數量】（如：fwhn 3）進行累加。\n"
+        f"💡 輸入 【0】 可直接返回重新輸入站號。"
+    )
+    return report
+
+@app.route("/callback", methods=['POST'])
+def callback():
+    signature = request.headers.get('X-Signature') or request.headers.get('X-Line-Signature')
+    body = request.get_data(as_text=True)
+    try:
+        handler.handle(body, signature)
+    except InvalidSignatureError:
+        abort(400)
+    return 'OK'
+
+@handler.add(MessageEvent, message=TextMessage)
+def handle_message(event):
+    user_id = event.source.user_id
+    raw_msg = event.message.text.strip()
+    user_msg = raw_msg.upper() 
+
+    if user_id not in USER_SESSIONS:
+        USER_SESSIONS[user_id] = {
+            "step": "input_site_id", "site_id": "未知站號", "site_name": "未命名站台", 
+            "equipments": {}, "ac_phase": "1P3W", "chosen_smrs": [], "failed_keyword": ""
+        }
+
+    session = USER_SESSIONS[user_id]
+
+    if user_msg in ["開始評估", "HELP", "⚡ 新設基地台電力評估"]:
+        USER_SESSIONS[user_id] = {
+            "step": "input_site_id", "site_id": "未知站號", "site_name": "未命名站台", 
+            "equipments": {}, "ac_phase": "1P3W", "chosen_smrs": [], "failed_keyword": ""
+        }
+        reply_text = (
+            "📱 【Nokia 電力助手 - 智慧雙向搜尋版】\n\n"
+            "【步驟 1：請輸入站號 或 站台名稱】\n"
+            "• 可以直接打站號（如：701873）\n"
+            "• 也可以打站台名稱關鍵字（如：安泰醫院）\n\n"
+            "系統將會自動檢索屏東歷史資料清單。"
+        )
+        line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply_text))
+        return
+
+    # 🔍 階段零：雙向檢索邏輯
+    if session["step"] == "input_site_id":
+        status, result = search_csv_database_advanced(raw_msg)
+        
+        if status == 'MATCH':
+            session["site_id"] = result["site_id"]
+            session["site_name"] = result["site_name"]
+            session["ac_phase"] = result
