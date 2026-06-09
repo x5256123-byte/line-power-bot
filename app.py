@@ -35,22 +35,33 @@ EQUIPMENT_DATABASE = {
 
 USER_SESSIONS = {}
 
+# --- 根路徑回應 (給 Render 健康檢查用) ---
+@app.route("/", methods=['GET'])
+def home():
+    return "Bot is running", 200
+
 def get_site_data():
     try:
         creds_json = os.environ.get("GOOGLE_CREDS_JSON")
         creds = ServiceAccountCredentials.from_json_keyfile_dict(json.loads(creds_json), ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"])
         client = gspread.authorize(creds)
-        sheet = client.open_by_key("1GOPuTeocq6G0gj4AUMdPUiE84TicJhj0Qcwvn2Sjoe4").worksheet("工作表1")
+        # 更新為您提供的檔案 ID
+        sheet = client.open_by_key("172To-4ENLnZutCsPP7qXCpXNANo4A5YNcyuRadHUGzg").worksheet("工作表1")
         
-        # 避開標題列問題的絕對位置讀取法
         all_values = sheet.get_all_values()
         data = []
-        for r in all_values[2:]: # 從第3列開始
+        # 從第 3 列 (index 2) 開始讀取資料
+        for r in all_values[2:]:
             if len(r) >= 6:
-                data.append({"台號": str(r[0]).strip(), "台名": str(r[1]).strip(), "模組型號": str(r[3]).strip(), "(模組位置 / 光接點)": str(r[5]).strip()})
+                data.append({
+                    "台號": str(r[0]).strip(), 
+                    "台名": str(r[1]).strip(), 
+                    "模組型號": str(r[3]).strip(), 
+                    "(模組位置 / 光接點)": str(r[5]).strip()
+                })
         return data
     except Exception as e:
-        print(f"DEBUG: Sheets 連線異常: {e}")
+        print(f"DEBUG: 連線異常: {e}")
         return []
 
 @app.route("/callback", methods=['POST'])
@@ -70,11 +81,10 @@ def handle_message(event):
     session = USER_SESSIONS.get(uid, {"step": "input_id", "equipments": {}})
     if session["step"] == "input_id":
         data = get_site_data()
-        debug_list = [str(r.get("台號", "NULL")) for r in data[:3]]
-        results = [r for r in data if msg.strip() == str(r.get("台號", "")).strip()]
-        
+        results = [r for r in data if msg == str(r.get("台號", "")).strip()]
         if not results:
-            line_bot_api.reply_message(event.reply_token, TextSendMessage(text=f"查無此站 '{msg}'。\n\n[除錯資訊]\n前3筆台號為：{debug_list}\n請檢查輸入格式。"))
+            debug_list = [str(r.get("台號", "NULL")) for r in data[:3]]
+            line_bot_api.reply_message(event.reply_token, TextSendMessage(text=f"查無此站 '{msg}'。\n\n[除錯資訊]\n目前讀到的前3筆台號為：{debug_list}\n請檢查輸入格式與試算表欄位。"))
         else:
             process_selection(uid, event.reply_token, results[0])
     elif session["step"] == "input_equip":
@@ -92,7 +102,6 @@ def get_report(site_name, equipments):
     net_dc = bbu_p + total_rf
     nfb = max(30, min(100, (math.ceil(((net_dc / 0.92) / (220 * 0.9) * 1.25)/10)*10)))
     wire = "8.0 mm²" if nfb <= 30 else ("14 mm²" if nfb <= 50 else "22 mm²")
-    details = "\n".join([f"• {EQUIPMENT_DATABASE[m]['name']} x {q}台" for m, q in equipments.items()])
     return f"🔍 【站台：{site_name}】\n總負載: {net_dc:.0f} W\n建議 NFB: {nfb} A\n建議線徑: {wire}\n\n輸入「0」返回，或「型號 數量」追加。"
 
 def process_selection(uid, token, r):
