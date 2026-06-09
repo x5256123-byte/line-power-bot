@@ -52,7 +52,8 @@ def get_site_data():
         client = gspread.authorize(creds)
         sheet = client.open_by_key("172To-4ENLnZutCsPP7qXCpXNANo4A5YNcyuRadHUGzg").worksheet("工作表1")
         all_values = sheet.get_all_values()
-        return [{"台號": str(r[0]).strip(), "台名": str(r[1]).strip(), "模組型號": str(r[4]).strip(), "(模組位置 / 光接點)": str(r[5]).strip()} for r in all_values[2:] if len(r) >= 6]
+        # 修正：模組型號在 C 欄(index 2)，位置在 D 欄(index 3)
+        return [{"台號": str(r[0]).strip(), "台名": str(r[1]).strip(), "模組型號": str(r[2]).strip(), "(模組位置 / 光接點)": str(r[3]).strip()} for r in all_values[1:] if len(r) >= 4]
     except Exception as e:
         print(f"DEBUG: 連線異常: {e}")
         return []
@@ -92,7 +93,7 @@ def process_all_records(uid, token, r_list):
             
     USER_SESSIONS[uid] = {"step": "input_equip", "site_name": site_name, "equipments": equipments}
     summary = "\n".join([f"• {m} x {q}台" for m, q in equipments.items()])
-    line_bot_api.reply_message(token, TextSendMessage(text=f"已載入 {site_name}，發現設備：\n{summary}\n\n輸入「計算」顯示報告，或「型號 數量」追加。"))
+    line_bot_api.reply_message(token, TextSendMessage(text=f"已載入 {site_name}，發現設備：\n{summary if summary else '未匹配到資料庫中的型號'}\n\n輸入「計算」顯示報告，或「型號 數量」追加。"))
 
 def get_report(site_name, equipments):
     bbu_p = 400
