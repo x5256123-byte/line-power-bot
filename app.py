@@ -52,8 +52,21 @@ def get_site_data():
         client = gspread.authorize(creds)
         sheet = client.open_by_key("172To-4ENLnZutCsPP7qXCpXNANo4A5YNcyuRadHUGzg").worksheet("工作表1")
         all_values = sheet.get_all_values()
-        # 修正：模組型號在 C 欄(index 2)，位置在 D 欄(index 3)
-        return [{"台號": str(r[0]).strip(), "台名": str(r[1]).strip(), "模組型號": str(r[2]).strip(), "(模組位置 / 光接點)": str(r[3]).strip()} for r in all_values[1:] if len(r) >= 4]
+        
+        data = []
+        for r in all_values[1:]: # 從第2列開始
+            if len(r) >= 4:
+                full_id = str(r[0]).strip().upper()
+                parts = full_id.split()
+                data.append({
+                    "完整台號": full_id,
+                    "主站號": parts[0] if parts else "",
+                    "選項": parts[1] if len(parts) > 1 else "",
+                    "台名": str(r[1]).strip(),
+                    "模組型號": str(r[2]).strip(),
+                    "(模組位置 / 光接點)": str(r[3]).strip()
+                })
+        return data
     except Exception as e:
         print(f"DEBUG: 連線異常: {e}")
         return []
@@ -63,15 +76,22 @@ def handle_message(event):
     uid, msg = event.source.user_id, event.message.text.strip().upper()
     if msg in ["開始評估", "HELP", "0"]:
         USER_SESSIONS[uid] = {"step": "input_id", "equipments": {}}
-        line_bot_api.reply_message(event.reply_token, TextSendMessage(text="請輸入站號："))
+        line_bot_api.reply_message(event.reply_token, TextSendMessage(text="請輸入站號 (例如: 716210 B)："))
         return
     
     session = USER_SESSIONS.get(uid, {"step": "input_id", "equipments": {}})
     if session["step"] == "input_id":
         data = get_site_data()
-        results = [r for r in data if msg == str(r.get("台號", "")).strip()]
+        parts = msg.split()
+        user_main_id = parts[0]
+        user_option = parts[1] if len(parts) > 1 else None
+        
+        results = [r for r in data if r["主站號"] == user_main_id]
+        if user_option:
+            results = [r for r in results if r["選項"] == user_option]
+            
         if not results:
-            line_bot_api.reply_message(event.reply_token, TextSendMessage(text=f"查無此站 '{msg}'。"))
+            line_bot_api.reply_message(event.reply_token, TextSendMessage(text=f"查無 '{msg}' 相關站台，請確認輸入格式。"))
         else:
             process_all_records(uid, event.reply_token, results)
     elif session["step"] == "input_equip":
