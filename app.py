@@ -91,11 +91,15 @@ def process_all_records(uid, token, r_list):
     equipments = {}
     
     # 遍歷該站號下所有的行，累加所有設備
-    for r in r_list:
-        model = r.get("模組型號", "").upper()
-        if model in EQUIPMENT_DATABASE:
-            equipments[model] = equipments.get(model, 0) + 1
-            
+# 從第 3 列 (index 2) 開始讀取資料
+        for r in all_values[2:]:
+            if len(r) >= 6:
+                data.append({
+                    "台號": str(r[0]).strip(), 
+                    "台名": str(r[1]).strip(), 
+                    "模組型號": str(r[4]).strip(),  # 修改這裡：原本是 3，改成 4 (E 欄)
+                    "(模組位置 / 光接點)": str(r[5]).strip() # 如果 F 欄是對的就不用動
+                })
     USER_SESSIONS[uid] = {"step": "input_equip", "site_name": site_name, "equipments": equipments}
     summary = "\n".join([f"• {m} x {q}台" for m, q in equipments.items()])
     line_bot_api.reply_message(token, TextSendMessage(text=f"已載入 {site_name}，發現設備：\n{summary}\n\n輸入「計算」顯示報告，或「型號 數量」追加。"))
